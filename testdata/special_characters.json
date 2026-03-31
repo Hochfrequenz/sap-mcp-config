@@ -1,0 +1,26 @@
+{
+  "default_system": "tricky",
+  "systems": {
+    "tricky": {
+      "host": "https://sap.example.com:44300",
+      "client": "100",
+      "user": "SAP_USER",
+      "password": "p@ss\"w0rd'with<special>&chars!{}[]",
+      "language": "EN"
+    },
+    "unicode": {
+      "host": "https://sap2.example.com:44300",
+      "client": "200",
+      "user": "UMLAUT_\u00dc\u00d6\u00c4",
+      "password": "\u00e4\u00f6\u00fc\u00df\u20ac\u00a3",
+      "language": "DE"
+    },
+    "backslash": {
+      "host": "https://sap3.example.com:44300",
+      "client": "300",
+      "user": "DOMAIN\\USER",
+      "password": "pass\\word\\with\\backslashes",
+      "language": "EN"
+    }
+  }
+}

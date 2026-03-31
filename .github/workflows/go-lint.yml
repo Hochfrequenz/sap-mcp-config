@@ -1,0 +1,26 @@
+name: "Go Lint"
+
+on:
+  pull_request: {}
+
+jobs:
+  golangci:
+    strategy:
+      matrix:
+        go-version: ["1.26.x"]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    name: lint
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+      - uses: actions/checkout@v6
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+          args: --enable dupl,goconst,gocyclo
+      - name: fmt
+        run: golangci-lint fmt --diff --enable gofmt
