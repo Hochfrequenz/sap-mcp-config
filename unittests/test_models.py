@@ -191,7 +191,10 @@ class TestYAMLMatchesJSON:
 
 class TestParseYAML:
     def test_parse_yaml_minimal(self) -> None:
-        data = "default_system: s\nsystems:\n  s:\n    host: 'https://x:443'\n    client: '100'\n    user: u\n    password: p\n"
+        data = (
+            "default_system: s\nsystems:\n  s:\n"
+            "    host: 'https://x:443'\n    client: '100'\n    user: u\n    password: p\n"
+        )
         cfg = parse_yaml(data)
         assert len(cfg.systems) == 1
         assert cfg.systems["s"].language == "EN"  # default applied
@@ -205,7 +208,10 @@ class TestYAMLUnquotedClient:
     """YAML users may write client: 100 (no quotes). Must coerce to string."""
 
     def test_unquoted_client_coerced_to_string(self) -> None:
-        data = "default_system: s\nsystems:\n  s:\n    host: 'https://x:443'\n    client: 100\n    user: u\n    password: p\n"
+        data = (
+            "default_system: s\nsystems:\n  s:\n"
+            "    host: 'https://x:443'\n    client: 100\n    user: u\n    password: p\n"
+        )
         cfg = parse_yaml(data)
         assert cfg.systems["s"].client == "100"
         assert isinstance(cfg.systems["s"].client, str)
