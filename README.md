@@ -24,10 +24,35 @@ The default config path (`~/.config/sap-mcp/systems.json`) follows the [XDG Base
 
 - **One config file, two languages** — Go and Python read the same JSON, guaranteed by shared test fixtures
 - **Validates eagerly** — reports _all_ errors at once so users fix everything in one pass
-- **Passwords never leak** — masked in `str()`/`repr()`/`fmt.Println()` output (Go: `fmt.Stringer`; Python: `pydantic.SecretStr`)
+- **Passwords never leak in print/log output** — masked in `str()`/`repr()`/`fmt.Println()`/`fmt.Sprintf("%+v")` (Go: `fmt.Formatter`; Python: `pydantic.SecretStr`)
 - **Immutable after loading** — frozen Pydantic models in Python; in Go, use the returned structs as read-only
 - **`.env` file support** — `SAP_CONFIG_FILE` can be set in a `.env` file
 - **Easy to extend** — subclass `SAPSystem` in Python or embed the struct in Go to add project-specific fields
+
+## MCP JSON Configuration
+
+This package integrates naturally with the [MCP JSON configuration standard](https://modelcontextprotocol.io/docs/concepts/transports). Point your MCP server to the shared config file via the `SAP_CONFIG_FILE` environment variable:
+
+```json
+{
+  "mcpServers": {
+    "sap-abap": {
+      "command": "mcp-server-abap",
+      "env": {
+        "SAP_CONFIG_FILE": "/home/user/.config/sap-mcp/systems.json"
+      }
+    },
+    "sap-webgui": {
+      "command": "sapwebgui-mcp",
+      "env": {
+        "SAP_CONFIG_FILE": "/home/user/.config/sap-mcp/systems.json"
+      }
+    }
+  }
+}
+```
+
+Both servers read the **same config file** with the **same credentials** — no duplication.
 
 ## Installation
 

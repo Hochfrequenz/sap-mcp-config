@@ -3,13 +3,16 @@
 import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, SecretStr, model_validator
 
 #: Default config file path when SAP_CONFIG_FILE is not set.
 DEFAULT_CONFIG_PATH = "~/.config/sap-mcp/systems.json"
+
+#: Language field type that normalizes to uppercase before validation.
+Language = Annotated[Literal["DE", "EN"], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 
 
 class SAPSystem(BaseModel):
@@ -28,7 +31,7 @@ class SAPSystem(BaseModel):
     client: str = ""
     user: str = ""
     password: SecretStr = SecretStr("")
-    language: Literal["DE", "EN"] = "EN"
+    language: Language = "EN"
     tls_skip_verify: bool = False
     oauth2_client_id: str = ""
 

@@ -60,6 +60,13 @@ func TestLanguageDefaultsToEN(t *testing.T) {
 	assert.Equal(t, "EN", cfg.Systems["s"].Language)
 }
 
+func TestLanguageCaseInsensitive(t *testing.T) {
+	data := `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p","language":"de"}}}`
+	cfg, err := sapmcpconfig.Parse([]byte(data))
+	require.NoError(t, err)
+	assert.Equal(t, "DE", cfg.Systems["s"].Language)
+}
+
 func TestParseValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -190,9 +197,14 @@ func TestPasswordMaskedInString(t *testing.T) {
 	assert.NotContains(t, str, "dev_secret")
 	assert.Contains(t, str, "***")
 
-	// Also check fmt.Sprintf which uses String()
+	// Also check fmt.Sprintf which uses String() via Format()
 	formatted := fmt.Sprintf("%v", dev)
 	assert.NotContains(t, formatted, "dev_secret")
+
+	// %+v also uses Format(), not the default struct printer
+	verbose := fmt.Sprintf("%+v", dev)
+	assert.NotContains(t, verbose, "dev_secret")
+	assert.Contains(t, verbose, "***")
 }
 
 func TestPasswordAccessible(t *testing.T) {

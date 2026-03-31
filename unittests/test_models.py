@@ -64,6 +64,16 @@ class TestLanguageDefaultsToEN:
         assert cfg.systems["s"].language == "EN"
 
 
+class TestLanguageCaseInsensitive:
+    def test_lowercase_language_normalized(self) -> None:
+        data = (
+            '{"default_system":"s","systems":{"s":'
+            '{"host":"https://x:443","client":"100","user":"u","password":"p","language":"de"}}}'
+        )
+        cfg = parse(data)
+        assert cfg.systems["s"].language == "DE"
+
+
 class TestSpecialCharacterPasswords:
     """Passwords with quotes, backslashes, unicode — same assertions as Go tests."""
 

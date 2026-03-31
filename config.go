@@ -48,16 +48,22 @@ func (s SAPSystem) String() string {
 	return fmt.Sprintf("SAPSystem{Host:%s Client:%s User:%s Password:%s Language:%s}", s.Host, s.Client, s.User, pwd, s.Language)
 }
 
+// Format implements fmt.Formatter to ensure the password is masked for all
+// format verbs including %+v and %#v.
+func (s SAPSystem) Format(f fmt.State, verb rune) {
+	// Always delegate to String() so the password is never printed.
+	fmt.Fprint(f, s.String())
+}
+
 // Config holds all configured SAP systems and a default system name.
 type Config struct {
 	DefaultSystem string               `json:"default_system"`
 	Systems       map[string]SAPSystem `json:"systems"`
 }
 
-// GetDefault returns the default system's configuration.
-func (c *Config) GetDefault() *SAPSystem {
-	sys := c.Systems[c.DefaultSystem]
-	return &sys
+// GetDefault returns a copy of the default system's configuration.
+func (c *Config) GetDefault() SAPSystem {
+	return c.Systems[c.DefaultSystem]
 }
 
 // expandHome replaces a leading ~ with the user's home directory.
@@ -104,12 +110,13 @@ func Parse(data []byte) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	// Apply defaults after validation.
+	// Normalize: uppercase language and apply default.
 	for name, sys := range cfg.Systems {
+		sys.Language = strings.ToUpper(sys.Language)
 		if sys.Language == "" {
 			sys.Language = "EN"
-			cfg.Systems[name] = sys
 		}
+		cfg.Systems[name] = sys
 	}
 	return &cfg, nil
 }
