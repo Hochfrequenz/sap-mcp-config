@@ -1,0 +1,27 @@
+{
+  "default_system": "dev",
+  "systems": {
+    "dev": {
+      "host": "https://dev-sap.example.com:44300",
+      "client": "100",
+      "user": "DEV_USER",
+      "password": "dev_secret",
+      "language": "DE",
+      "tls_skip_verify": true
+    },
+    "prod": {
+      "host": "https://prod-sap.example.com:44300",
+      "client": "200",
+      "user": "PROD_USER",
+      "password": "prod_secret",
+      "language": "EN",
+      "tls_skip_verify": false
+    },
+    "oauth": {
+      "host": "https://oauth-sap.example.com:44300",
+      "client": "300",
+      "language": "EN",
+      "oauth2_client_id": "my-mcp-client"
+    }
+  }
+}
