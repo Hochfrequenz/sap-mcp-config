@@ -52,7 +52,7 @@ func (s SAPSystem) String() string {
 // format verbs including %+v and %#v.
 func (s SAPSystem) Format(f fmt.State, verb rune) {
 	// Always delegate to String() so the password is never printed.
-	fmt.Fprint(f, s.String())
+	_, _ = fmt.Fprint(f, s.String())
 }
 
 // Config holds all configured SAP systems and a default system name.
