@@ -1,55 +1,108 @@
 """Shared configuration types for MCP servers that connect to SAP systems."""
 
 import json
+import os
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
+
+#: Default config file path when SAP_CONFIG_FILE is not set.
+DEFAULT_CONFIG_PATH = "~/.config/sap-mcp/systems.json"
 
 
 class SAPSystem(BaseModel):
-    """A single SAP system's connection details and credentials."""
+    """A single SAP system's connection details and credentials.
 
-    host: str
+    Either both ``user`` and ``password`` must be set, or neither (for OAuth2).
+
+    The ``password`` field is a :class:`~pydantic.SecretStr` so that it is
+    never accidentally printed or logged.  Access the plain text value via
+    ``system.password.get_secret_value()``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    host: str = ""
     client: str = ""
     user: str = ""
-    password: str = ""
-    language: str = "EN"
+    password: SecretStr = SecretStr("")
+    language: Literal["DE", "EN"] = "EN"
     tls_skip_verify: bool = False
     oauth2_client_id: str = ""
 
     @property
     def is_oauth2(self) -> bool:
         """True when the system is configured for OAuth2 (no user/password)."""
-        return self.user == "" and self.password == ""
-
-    @model_validator(mode="after")
-    def _user_password_both_or_neither(self) -> "SAPSystem":
-        if (self.user == "") != (self.password == ""):
-            raise ValueError("must have both user and password, or neither (for OAuth2)")
-        return self
+        return self.user == "" and self.password.get_secret_value() == ""
 
 
 class Config(BaseModel):
-    """All configured SAP systems and a default system name."""
+    """All configured SAP systems and a default system name.
+
+    Use :func:`load`, :func:`load_default`, or :func:`parse` to create
+    instances — they validate the configuration before returning it.
+    """
+
+    model_config = ConfigDict(frozen=True)
 
     default_system: str
     systems: dict[str, SAPSystem]
 
     @model_validator(mode="after")
     def _validate(self) -> "Config":
+        """Collect **all** validation errors so users can fix everything in one pass."""
+        errs: list[str] = []
         if not self.systems:
             raise ValueError("config has no systems defined")
         if self.default_system not in self.systems:
-            raise ValueError(f'default_system "{self.default_system}" not found in systems')
+            errs.append(f'default_system "{self.default_system}" not found in systems')
+        for name, sys in self.systems.items():
+            if not sys.host:
+                errs.append(f'system "{name}": host is required')
+            elif not sys.host.startswith(("http://", "https://")):
+                errs.append(f'system "{name}": host must start with http:// or https://, got "{sys.host}"')
+            if sys.client and (len(sys.client) != 3 or not sys.client.isdigit()):
+                errs.append(f'system "{name}": client must be a 3-digit string (e.g. "100"), got "{sys.client}"')
+            pwd = sys.password.get_secret_value()
+            if (sys.user == "") != (pwd == ""):
+                errs.append(f'system "{name}": must have both user and password, or neither (for OAuth2)')
+        if errs:
+            raise ValueError("invalid configuration:\n  - " + "\n  - ".join(errs))
         return self
+
+    def get_default(self) -> SAPSystem:
+        """Return the default system's configuration."""
+        return self.systems[self.default_system]
 
 
 def parse(data: str | bytes) -> Config:
-    """Parse a JSON string or bytes into a Config."""
+    """Parse a JSON string or bytes into a validated Config.
+
+    Raises ``pydantic.ValidationError`` with human-readable messages
+    if the configuration is invalid.
+    """
     raw = json.loads(data)
     return Config(**raw)
 
 
 def load(path: str | Path) -> Config:
-    """Load a Config from a JSON file."""
-    return parse(Path(path).read_bytes())
+    """Load a Config from a JSON file.
+
+    The *path* may start with ``~`` which is expanded to the user's home
+    directory.
+    """
+    return parse(Path(path).expanduser().read_bytes())
+
+
+def load_default() -> Config:
+    """Load configuration from ``SAP_CONFIG_FILE`` env var, falling back to
+    :data:`DEFAULT_CONFIG_PATH`.
+
+    Loads ``.env`` files from the current directory before reading the
+    environment variable.
+    """
+    load_dotenv()  # best-effort; missing .env is fine
+    path = os.environ.get("SAP_CONFIG_FILE", DEFAULT_CONFIG_PATH)
+    return load(path)

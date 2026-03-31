@@ -1,10 +1,51 @@
 # sap-mcp-config
 
-Shared Go + Python configuration models for MCP servers that connect to SAP systems.
+![Go Tests](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Go%20Tests/badge.svg)
+![Go Coverage](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Go%20Coverage/badge.svg)
+![Go Lint](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Go%20Lint/badge.svg)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Hochfrequenz/sap-mcp-config.svg)](https://pkg.go.dev/github.com/Hochfrequenz/sap-mcp-config)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Hochfrequenz/sap-mcp-config)](https://goreportcard.com/report/github.com/Hochfrequenz/sap-mcp-config)
+![Python Tests](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Python%20Tests/badge.svg)
+![Python Coverage](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Python%20Coverage/badge.svg)
+![Python Lint](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Python%20Lint/badge.svg)
+![Python Formatting](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Python%20Formatting/badge.svg)
+![Python Versions](https://img.shields.io/pypi/pyversions/sap-mcp-config.svg)
+![PyPI](https://img.shields.io/pypi/v/sap-mcp-config)
 
-Both [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap) (Go) and [sapwebgui.mcp](https://github.com/Hochfrequenz/sapwebgui.mcp) (Python) connect to the same SAP systems with the same credentials. This package provides a single canonical configuration format so that both servers read from the same config file.
+**The standard way to manage SAP credentials for MCP servers.**
 
-## Configuration Format
+If you're building an MCP server that connects to SAP, use this package. It gives you validated, type-safe configuration in both Go and Python with a single shared config file. No more reinventing credential loading, no more inconsistent formats between projects.
+
+Both [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap) (Go) and [sapwebgui.mcp](https://github.com/Hochfrequenz/sapwebgui.mcp) (Python) use this package.
+
+The default config path (`~/.config/sap-mcp/systems.json`) follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/).
+
+## Features
+
+- **One config file, two languages** — Go and Python read the same JSON, guaranteed by shared test fixtures
+- **Validates eagerly** — reports _all_ errors at once so users fix everything in one pass
+- **Passwords never leak** — masked in `str()`/`repr()`/`fmt.Println()` output (Go: `fmt.Stringer`; Python: `pydantic.SecretStr`)
+- **Immutable after loading** — frozen Pydantic models in Python; in Go, use the returned structs as read-only
+- **`.env` file support** — `SAP_CONFIG_FILE` can be set in a `.env` file
+- **Easy to extend** — subclass `SAPSystem` in Python or embed the struct in Go to add project-specific fields
+
+## Installation
+
+### Go
+
+```bash
+go get github.com/Hochfrequenz/sap-mcp-config
+```
+
+### Python
+
+```bash
+pip install sap-mcp-config
+```
+
+## Configuration File
+
+Create `~/.config/sap-mcp/systems.json`:
 
 ```json
 {
@@ -15,8 +56,7 @@ Both [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap) (Go) and
       "client": "100",
       "user": "YOUR_USER",
       "password": "YOUR_PASSWORD",
-      "language": "DE",
-      "tls_skip_verify": false
+      "language": "DE"
     },
     "prod": {
       "host": "https://prod-sap:44300",
@@ -29,44 +69,157 @@ Both [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap) (Go) and
 }
 ```
 
-Default config file location: `~/.config/sap-mcp/systems.json`
+Override the config file location via the `SAP_CONFIG_FILE` environment variable:
 
-Override via environment variable: `SAP_CONFIG_FILE=/path/to/config.json`
+```bash
+export SAP_CONFIG_FILE=/path/to/my/config.json
+```
 
-## Fields
+This also works from a `.env` file in the current directory.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `host` | string | yes | SAP system base URL |
-| `client` | string | no | SAP client/mandant (e.g. `"100"`) |
-| `user` | string | conditional | SAP username (omit for OAuth2) |
-| `password` | string | conditional | SAP password (omit for OAuth2) |
-| `language` | string | no | Login language (`"DE"`, `"EN"`, default `"EN"`) |
-| `tls_skip_verify` | bool | no | Skip TLS certificate verification (default `false`) |
-| `oauth2_client_id` | string | no | OAuth2 client ID for token-based auth |
+### Fields
 
-Either both `user` and `password` must be set, or neither (for OAuth2).
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `host` | string | yes | | SAP system base URL (must start with `http://` or `https://`) |
+| `client` | string | no | `""` | SAP client/mandant, must be exactly 3 digits (e.g. `"100"`) |
+| `user` | string | conditional | `""` | SAP username (omit for OAuth2) |
+| `password` | string | conditional | `""` | SAP password (omit for OAuth2) |
+| `language` | string | no | `"EN"` | Login language: `"DE"` or `"EN"` |
+| `tls_skip_verify` | bool | no | `false` | Skip TLS certificate verification |
+| `oauth2_client_id` | string | no | `""` | OAuth2 client ID for token-based auth |
+
+**Validation rules:**
+- At least one system must be defined
+- `default_system` must reference an existing system
+- `host` is required and must start with `http://` or `https://`
+- `client`, if set, must be exactly 3 digits
+- `language`, if set, must be `"DE"` or `"EN"`
+- Either both `user` and `password` must be set, or neither (for OAuth2)
 
 ## Usage
 
 ### Go
 
 ```go
-import sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+package main
 
-cfg, err := sapmcpconfig.Load("~/.config/sap-mcp/systems.json")
-dev := cfg.Systems["dev"]
-fmt.Println(dev.Host, dev.Client, dev.User)
+import (
+    "fmt"
+    "os"
+
+    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+)
+
+func main() {
+    // Load from SAP_CONFIG_FILE env var or ~/.config/sap-mcp/systems.json
+    cfg, err := sapmcpconfig.LoadDefault()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Configuration error:\n%s\n", err)
+        os.Exit(1)
+    }
+
+    // Access the default system
+    dev := cfg.GetDefault()
+    fmt.Println(dev.Host, dev.Client, dev.User)
+
+    // Access a specific system
+    prod := cfg.Systems["prod"]
+    fmt.Println(prod.Host, prod.Client, prod.User)
+
+    // Password is safe to print — it won't leak
+    fmt.Println(dev) // Output: SAPSystem{Host:https://... Client:100 User:DEV_USER Password:*** Language:DE}
+}
 ```
 
 ### Python
 
 ```python
-from sap_mcp_config import load
+import sys
 
-cfg = load("~/.config/sap-mcp/systems.json")
-dev = cfg.systems["dev"]
+from pydantic import ValidationError
+
+from sap_mcp_config import load_default
+
+try:
+    # Load from SAP_CONFIG_FILE env var or ~/.config/sap-mcp/systems.json
+    cfg = load_default()
+except FileNotFoundError:
+    print("Config file not found. Create ~/.config/sap-mcp/systems.json")
+    sys.exit(1)
+except ValidationError as e:
+    print(f"Configuration error:\n{e}")
+    sys.exit(1)
+
+# Access the default system
+dev = cfg.get_default()
 print(dev.host, dev.client, dev.user)
+
+# Access a specific system
+prod = cfg.systems["prod"]
+print(prod.host, prod.client, prod.user)
+
+# Password is a SecretStr — it won't leak in print/logs
+print(dev)  # password=SecretStr('**********')
+
+# Access the actual password value when needed
+password = dev.password.get_secret_value()
+```
+
+### Error Messages
+
+Both implementations validate eagerly and return **all** errors at once. A misconfigured file like this:
+
+```json
+{
+  "default_system": "missing",
+  "systems": {
+    "dev": { "host": "ftp://wrong", "client": "1", "user": "u" }
+  }
+}
+```
+
+...will report all problems in a single error:
+
+```
+invalid configuration:
+  - default_system "missing" not found in systems
+  - system "dev": host must start with http:// or https://, got "ftp://wrong"
+  - system "dev": client must be a 3-digit string (e.g. "100"), got "1"
+  - system "dev": must have both user and password, or neither (for OAuth2)
+```
+
+This way users fix everything in one pass instead of playing whack-a-mole.
+
+## Extending the Configuration
+
+Both languages make it easy to add project-specific fields on top of the shared base.
+
+### Python
+
+Subclass `SAPSystem` to add your own fields:
+
+```python
+from pydantic import ConfigDict
+from sap_mcp_config import SAPSystem
+
+class MySAPSystem(SAPSystem):
+    model_config = ConfigDict()  # unfreeze for subclass
+
+    connection_name: str = ""
+    custom_timeout: int = 30
+```
+
+### Go
+
+Embed `SAPSystem` in your own struct:
+
+```go
+type MySAPSystem struct {
+    sapmcpconfig.SAPSystem
+    ConnectionName string `json:"connection_name"`
+    CustomTimeout  int    `json:"custom_timeout"`
+}
 ```
 
 ## Development
@@ -82,6 +235,16 @@ go test ./...
 ```bash
 pip install -e ".[tests]"
 PYTHONPATH=src pytest unittests
+```
+
+Or via tox:
+
+```bash
+pip install tox
+tox -e tests       # unit tests
+tox -e linting     # pylint
+tox -e type_check  # mypy --strict
+tox -e coverage    # coverage with 80% minimum
 ```
 
 ## License

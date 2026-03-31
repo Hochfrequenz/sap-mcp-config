@@ -1,6 +1,8 @@
 package sapmcpconfig_test
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -44,6 +46,20 @@ func TestLoadTestFixture(t *testing.T) {
 	assert.True(t, oauth.IsOAuth2())
 }
 
+func TestGetDefault(t *testing.T) {
+	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	require.NoError(t, err)
+	def := cfg.GetDefault()
+	assert.Equal(t, "https://dev-sap.example.com:44300", def.Host)
+}
+
+func TestLanguageDefaultsToEN(t *testing.T) {
+	data := `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}`
+	cfg, err := sapmcpconfig.Parse([]byte(data))
+	require.NoError(t, err)
+	assert.Equal(t, "EN", cfg.Systems["s"].Language)
+}
+
 func TestParseValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -56,24 +72,44 @@ func TestParseValidation(t *testing.T) {
 			wantErr: "no systems defined",
 		},
 		{
+			name:    "null systems",
+			json:    `{"default_system":"x","systems":null}`,
+			wantErr: "no systems defined",
+		},
+		{
 			name:    "default not found",
-			json:    `{"default_system":"missing","systems":{"a":{"host":"h","user":"u","password":"p"}}}`,
+			json:    `{"default_system":"missing","systems":{"a":{"host":"https://h","user":"u","password":"p"}}}`,
 			wantErr: `default_system "missing" not found`,
 		},
 		{
 			name:    "missing host",
 			json:    `{"default_system":"a","systems":{"a":{"client":"100","user":"u","password":"p"}}}`,
-			wantErr: "no host configured",
+			wantErr: `system "a": host is required`,
+		},
+		{
+			name:    "invalid host scheme",
+			json:    `{"default_system":"a","systems":{"a":{"host":"ftp://h","client":"100","user":"u","password":"p"}}}`,
+			wantErr: "host must start with http:// or https://",
+		},
+		{
+			name:    "invalid client",
+			json:    `{"default_system":"a","systems":{"a":{"host":"https://h","client":"1","user":"u","password":"p"}}}`,
+			wantErr: `client must be a 3-digit string`,
 		},
 		{
 			name:    "user without password",
-			json:    `{"default_system":"a","systems":{"a":{"host":"h","user":"u"}}}`,
+			json:    `{"default_system":"a","systems":{"a":{"host":"https://h","user":"u"}}}`,
 			wantErr: "must have both user and password",
 		},
 		{
 			name:    "password without user",
-			json:    `{"default_system":"a","systems":{"a":{"host":"h","password":"p"}}}`,
+			json:    `{"default_system":"a","systems":{"a":{"host":"https://h","password":"p"}}}`,
 			wantErr: "must have both user and password",
+		},
+		{
+			name:    "invalid language",
+			json:    `{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"FR"}}}`,
+			wantErr: `language must be "DE" or "EN"`,
 		},
 	}
 
@@ -114,5 +150,59 @@ func TestSpecialCharacterPasswords(t *testing.T) {
 func TestLoadFileNotFound(t *testing.T) {
 	_, err := sapmcpconfig.Load("nonexistent.json")
 	require.Error(t, err)
-	assert.True(t, os.IsNotExist(err) || true) // wrapped error
+	assert.True(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestLoadDefaultUsesEnvVar(t *testing.T) {
+	t.Setenv("SAP_CONFIG_FILE", "testdata/systems.json")
+	cfg, err := sapmcpconfig.LoadDefault()
+	require.NoError(t, err)
+	assert.Equal(t, "dev", cfg.DefaultSystem)
+}
+
+func TestMultipleValidationErrors(t *testing.T) {
+	// Two systems, both broken — both errors should appear.
+	data := `{"default_system":"a","systems":{"a":{"host":""},"b":{"host":"","user":"u"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `system "a"`)
+	assert.Contains(t, err.Error(), `system "b"`)
+}
+
+func TestReadmeExample(t *testing.T) {
+	// The README claims that multiple problems are reported in a single error.
+	data := `{"default_system":"missing","systems":{"dev":{"host":"ftp://wrong","client":"1","user":"u"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, `default_system "missing" not found`)
+	assert.Contains(t, msg, "host must start with http")
+	assert.Contains(t, msg, "client must be a 3-digit string")
+	assert.Contains(t, msg, "must have both user and password")
+}
+
+func TestPasswordMaskedInString(t *testing.T) {
+	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	require.NoError(t, err)
+
+	dev := cfg.Systems["dev"]
+	str := dev.String()
+	assert.NotContains(t, str, "dev_secret")
+	assert.Contains(t, str, "***")
+
+	// Also check fmt.Sprintf which uses String()
+	formatted := fmt.Sprintf("%v", dev)
+	assert.NotContains(t, formatted, "dev_secret")
+}
+
+func TestPasswordAccessible(t *testing.T) {
+	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	require.NoError(t, err)
+	assert.Equal(t, "dev_secret", cfg.Systems["dev"].Password)
+}
+
+func TestLoadDefaultFileNotFound(t *testing.T) {
+	t.Setenv("SAP_CONFIG_FILE", "/nonexistent/path/systems.json")
+	_, err := sapmcpconfig.LoadDefault()
+	require.Error(t, err)
 }

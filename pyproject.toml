@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2",
+    "python-dotenv>=1",
 ]
 dynamic = ["readme", "version"]
 
@@ -64,6 +65,7 @@ max-line-length = 120
 
 [tool.mypy]
 disable_error_code = []
+plugins = ["pydantic.mypy"]
 
 [build-system]
 requires = ["hatchling>=1.8.0", "hatch-vcs", "hatch-fancy-pypi-readme"]
