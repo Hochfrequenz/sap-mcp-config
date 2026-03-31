@@ -1,9 +1,9 @@
 // Package sapmcpconfig provides shared configuration types for MCP servers
 // that connect to SAP systems.
 //
-// Use [Load] or [LoadDefault] to read a configuration file.
-// Use [Parse] to parse JSON bytes directly.
-// All three functions validate the configuration before returning it.
+// Use [Load] or [LoadDefault] to read a configuration file (JSON or YAML).
+// Use [Parse] to parse JSON bytes directly, or [ParseYAML] for YAML.
+// All functions validate the configuration before returning it.
 package sapmcpconfig
 
 import (
@@ -14,23 +14,27 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+	"gopkg.in/yaml.v3"
 )
 
 // DefaultConfigPath is the fallback location when SAP_CONFIG_FILE is not set.
 const DefaultConfigPath = "~/.config/sap-mcp/systems.json"
+
+// Supported config file extensions for automatic format detection in [Load].
+var yamlExtensions = map[string]bool{".yaml": true, ".yml": true}
 
 // SAPSystem describes a single SAP system's connection details and credentials.
 //
 // Always obtain instances through [Load], [LoadDefault], or [Parse] to ensure
 // all fields are validated.
 type SAPSystem struct {
-	Host           string `json:"host"`
-	Client         string `json:"client"`
-	User           string `json:"user,omitempty"`
-	Password       string `json:"password,omitempty"`
-	Language       string `json:"language,omitempty"`
-	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty"`
-	OAuth2ClientID string `json:"oauth2_client_id,omitempty"`
+	Host           string `json:"host" yaml:"host"`
+	Client         string `json:"client" yaml:"client"`
+	User           string `json:"user,omitempty" yaml:"user,omitempty"`
+	Password       string `json:"password,omitempty" yaml:"password,omitempty"`
+	Language       string `json:"language,omitempty" yaml:"language,omitempty"`
+	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty" yaml:"tls_skip_verify,omitempty"`
+	OAuth2ClientID string `json:"oauth2_client_id,omitempty" yaml:"oauth2_client_id,omitempty"`
 }
 
 // IsOAuth2 returns true when the system is configured for OAuth2 (no user/password).
@@ -57,8 +61,8 @@ func (s SAPSystem) Format(f fmt.State, verb rune) {
 
 // Config holds all configured SAP systems and a default system name.
 type Config struct {
-	DefaultSystem string               `json:"default_system"`
-	Systems       map[string]SAPSystem `json:"systems"`
+	DefaultSystem string               `json:"default_system" yaml:"default_system"`
+	Systems       map[string]SAPSystem `json:"systems" yaml:"systems"`
 }
 
 // GetDefault returns a copy of the default system's configuration.
@@ -78,12 +82,18 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[1:])
 }
 
-// Load reads a Config from the given JSON file and validates it.
+// Load reads a Config from a JSON or YAML file and validates it.
+// The format is detected by file extension: .yaml/.yml for YAML, everything
+// else (including .json) for JSON.
 // The path may start with ~ which is expanded to the user's home directory.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(expandHome(path))
+	expanded := expandHome(path)
+	data, err := os.ReadFile(expanded)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file %q: %w", path, err)
+	}
+	if yamlExtensions[strings.ToLower(filepath.Ext(expanded))] {
+		return ParseYAML(data)
 	}
 	return Parse(data)
 }
@@ -101,16 +111,29 @@ func LoadDefault() (*Config, error) {
 	return Load(path)
 }
 
+// ParseYAML unmarshals YAML bytes into a Config and validates it.
+func ParseYAML(data []byte) (*Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config (expected YAML): %w", err)
+	}
+	return normalizeAndValidate(&cfg)
+}
+
 // Parse unmarshals JSON bytes into a Config and validates it.
 func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config (expected JSON): %w", err)
 	}
+	return normalizeAndValidate(&cfg)
+}
+
+// normalizeAndValidate validates and normalizes a parsed Config.
+func normalizeAndValidate(cfg *Config) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	// Normalize: uppercase language and apply default.
 	for name, sys := range cfg.Systems {
 		sys.Language = strings.ToUpper(sys.Language)
 		if sys.Language == "" {
@@ -118,7 +141,7 @@ func Parse(data []byte) (*Config, error) {
 		}
 		cfg.Systems[name] = sys
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 // Validate checks that the Config is well-formed.

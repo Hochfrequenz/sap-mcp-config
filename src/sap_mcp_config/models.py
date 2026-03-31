@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Annotated, Literal
 
+import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, BeforeValidator, ConfigDict, SecretStr, model_validator
 
@@ -28,7 +29,7 @@ class SAPSystem(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     host: str = ""
-    client: str = ""
+    client: Annotated[str, BeforeValidator(lambda v: str(v) if isinstance(v, (int, float)) else v)] = ""
     user: str = ""
     password: SecretStr = SecretStr("")
     language: Language = "EN"
@@ -90,13 +91,35 @@ def parse(data: str | bytes) -> Config:
     return Config(**raw)
 
 
+def parse_yaml(data: str | bytes) -> Config:
+    """Parse a YAML string or bytes into a validated Config.
+
+    Raises ``pydantic.ValidationError`` with human-readable messages
+    if the configuration is invalid.
+    """
+    raw = yaml.safe_load(data)
+    if not isinstance(raw, dict):
+        raise ValueError("expected a YAML mapping at the top level")
+    return Config(**raw)
+
+
+_YAML_EXTENSIONS = {".yaml", ".yml"}
+
+
 def load(path: str | Path) -> Config:
-    """Load a Config from a JSON file.
+    """Load a Config from a JSON or YAML file.
+
+    The format is detected by file extension: ``.yaml`` / ``.yml`` for YAML,
+    everything else (including ``.json``) for JSON.
 
     The *path* may start with ``~`` which is expanded to the user's home
     directory.
     """
-    return parse(Path(path).expanduser().read_bytes())
+    resolved = Path(path).expanduser()
+    data = resolved.read_bytes()
+    if resolved.suffix.lower() in _YAML_EXTENSIONS:
+        return parse_yaml(data)
+    return parse(data)
 
 
 def load_default() -> Config:

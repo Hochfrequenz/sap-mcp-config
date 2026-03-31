@@ -154,6 +154,82 @@ func TestSpecialCharacterPasswords(t *testing.T) {
 	assert.Equal(t, `pass\word\with\backslashes`, backslash.Password)
 }
 
+func TestLoadYAMLFixture(t *testing.T) {
+	cfg, err := sapmcpconfig.Load("testdata/systems.yaml")
+	require.NoError(t, err)
+
+	assert.Equal(t, "dev", cfg.DefaultSystem)
+	assert.Len(t, cfg.Systems, 3)
+
+	dev := cfg.Systems["dev"]
+	assert.Equal(t, "https://dev-sap.example.com:44300", dev.Host)
+	assert.Equal(t, "100", dev.Client)
+	assert.Equal(t, "DEV_USER", dev.User)
+	assert.Equal(t, "dev_secret", dev.Password)
+	assert.Equal(t, "DE", dev.Language)
+	assert.True(t, dev.TLSSkipVerify)
+
+	oauth := cfg.Systems["oauth"]
+	assert.True(t, oauth.IsOAuth2())
+	assert.Equal(t, "my-mcp-client", oauth.OAuth2ClientID)
+}
+
+func TestLoadYAMLMatchesJSON(t *testing.T) {
+	jsonCfg, err := sapmcpconfig.Load("testdata/systems.json")
+	require.NoError(t, err)
+
+	yamlCfg, err := sapmcpconfig.Load("testdata/systems.yaml")
+	require.NoError(t, err)
+
+	// Same data, different format — must produce identical configs.
+	assert.Equal(t, jsonCfg.DefaultSystem, yamlCfg.DefaultSystem)
+	assert.Equal(t, len(jsonCfg.Systems), len(yamlCfg.Systems))
+	for name, jsonSys := range jsonCfg.Systems {
+		yamlSys, ok := yamlCfg.Systems[name]
+		require.True(t, ok, "system %q missing from YAML config", name)
+		assert.Equal(t, jsonSys, yamlSys, "system %q differs between JSON and YAML", name)
+	}
+}
+
+func TestParseYAML(t *testing.T) {
+	data := []byte("default_system: s\nsystems:\n  s:\n    host: \"https://x:443\"\n    client: \"100\"\n    user: u\n    password: p\n")
+	cfg, err := sapmcpconfig.ParseYAML(data)
+	require.NoError(t, err)
+	assert.Len(t, cfg.Systems, 1)
+	assert.Equal(t, "EN", cfg.Systems["s"].Language) // default applied
+}
+
+func TestYAMLUnquotedClient(t *testing.T) {
+	data := []byte("default_system: s\nsystems:\n  s:\n    host: \"https://x:443\"\n    client: 100\n    user: u\n    password: p\n")
+	cfg, err := sapmcpconfig.ParseYAML(data)
+	require.NoError(t, err)
+	assert.Equal(t, "100", cfg.Systems["s"].Client)
+}
+
+func TestYAMLSpecialCharacters(t *testing.T) {
+	cfg, err := sapmcpconfig.Load("testdata/special_characters.yaml")
+	require.NoError(t, err)
+
+	tricky := cfg.Systems["tricky"]
+	assert.Equal(t, "p@ss:word#with!special&chars", tricky.Password)
+
+	backslash := cfg.Systems["backslash"]
+	assert.Equal(t, `DOMAIN\USER`, backslash.User)
+	assert.Equal(t, `pass\word\with\backslashes`, backslash.Password)
+}
+
+func TestLoadYMLExtension(t *testing.T) {
+	// Copy the YAML fixture with .yml extension to verify extension detection.
+	data, err := os.ReadFile("testdata/systems.yaml")
+	require.NoError(t, err)
+	tmp := t.TempDir() + "/config.yml"
+	require.NoError(t, os.WriteFile(tmp, data, 0o644))
+
+	cfg, err := sapmcpconfig.Load(tmp)
+	require.NoError(t, err)
+	assert.Equal(t, "dev", cfg.DefaultSystem)
+}
+
 func TestLoadFileNotFound(t *testing.T) {
 	_, err := sapmcpconfig.Load("nonexistent.json")
 	require.Error(t, err)

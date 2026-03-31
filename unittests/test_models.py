@@ -5,9 +5,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sap_mcp_config import SAPSystem, load, load_default, parse
+from sap_mcp_config import SAPSystem, load, load_default, parse, parse_yaml
 
 TESTDATA = Path(__file__).resolve().parent.parent / "testdata" / "systems.json"
+TESTDATA_YAML = Path(__file__).resolve().parent.parent / "testdata" / "systems.yaml"
 TESTDATA_SPECIAL = Path(__file__).resolve().parent.parent / "testdata" / "special_characters.json"
 
 
@@ -146,6 +147,94 @@ class TestParseValidation:
             parse(
                 '{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"FR"}}}'
             )
+
+
+class TestLoadYAMLFixture:
+    """Parse the shared testdata/systems.yaml — same assertions as JSON tests."""
+
+    def test_load_yaml_fixture(self) -> None:
+        cfg = load(TESTDATA_YAML)
+
+        assert cfg.default_system == "dev"
+        assert len(cfg.systems) == 3
+
+        dev = cfg.systems["dev"]
+        assert dev.host == "https://dev-sap.example.com:44300"
+        assert dev.client == "100"
+        assert dev.user == "DEV_USER"
+        assert dev.password.get_secret_value() == "dev_secret"
+        assert dev.language == "DE"
+        assert dev.tls_skip_verify is True
+
+        oauth = cfg.systems["oauth"]
+        assert oauth.is_oauth2 is True
+        assert oauth.oauth2_client_id == "my-mcp-client"
+
+
+class TestYAMLMatchesJSON:
+    def test_yaml_and_json_produce_same_config(self) -> None:
+        json_cfg = load(TESTDATA)
+        yaml_cfg = load(TESTDATA_YAML)
+
+        assert json_cfg.default_system == yaml_cfg.default_system
+        assert len(json_cfg.systems) == len(yaml_cfg.systems)
+        for name, json_sys in json_cfg.systems.items():
+            yaml_sys = yaml_cfg.systems[name]
+            assert json_sys.host == yaml_sys.host
+            assert json_sys.client == yaml_sys.client
+            assert json_sys.user == yaml_sys.user
+            assert json_sys.password.get_secret_value() == yaml_sys.password.get_secret_value()
+            assert json_sys.language == yaml_sys.language
+            assert json_sys.tls_skip_verify == yaml_sys.tls_skip_verify
+            assert json_sys.oauth2_client_id == yaml_sys.oauth2_client_id
+
+
+class TestParseYAML:
+    def test_parse_yaml_minimal(self) -> None:
+        data = (
+            "default_system: s\nsystems:\n  s:\n"
+            "    host: 'https://x:443'\n    client: '100'\n    user: u\n    password: p\n"
+        )
+        cfg = parse_yaml(data)
+        assert len(cfg.systems) == 1
+        assert cfg.systems["s"].language == "EN"  # default applied
+
+    def test_parse_yaml_invalid(self) -> None:
+        with pytest.raises(ValueError, match="expected a YAML mapping"):
+            parse_yaml("just a string")
+
+
+class TestYAMLUnquotedClient:
+    """YAML users may write client: 100 (no quotes). Must coerce to string."""
+
+    def test_unquoted_client_coerced_to_string(self) -> None:
+        data = (
+            "default_system: s\nsystems:\n  s:\n"
+            "    host: 'https://x:443'\n    client: 100\n    user: u\n    password: p\n"
+        )
+        cfg = parse_yaml(data)
+        assert cfg.systems["s"].client == "100"
+        assert isinstance(cfg.systems["s"].client, str)
+
+
+class TestYAMLSpecialCharacters:
+    """YAML has its own special characters (:, #, etc.) that need quoting."""
+
+    def test_special_characters_yaml(self) -> None:
+        testdata_special_yaml = Path(__file__).resolve().parent.parent / "testdata" / "special_characters.yaml"
+        cfg = load(testdata_special_yaml)
+        assert cfg.systems["tricky"].password.get_secret_value() == "p@ss:word#with!special&chars"
+        assert cfg.systems["backslash"].user == "DOMAIN\\USER"
+        assert cfg.systems["backslash"].password.get_secret_value() == "pass\\word\\with\\backslashes"
+
+
+class TestLoadYMLExtension:
+    def test_yml_extension_detected(self, tmp_path: Path) -> None:
+        src = TESTDATA_YAML.read_bytes()
+        yml_file = tmp_path / "config.yml"
+        yml_file.write_bytes(src)
+        cfg = load(yml_file)
+        assert cfg.default_system == "dev"
 
 
 class TestFrozenModels:
