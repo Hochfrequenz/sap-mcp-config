@@ -22,7 +22,8 @@ The default config path (`~/.config/sap-mcp/systems.json`) follows the [XDG Base
 
 ## Features
 
-- **One config file, two languages** — Go and Python read the same JSON, guaranteed by shared test fixtures
+- **One config file, two languages** — Go and Python read the same config, guaranteed by shared test fixtures
+- **JSON and YAML** — use whichever format you prefer (auto-detected by file extension)
 - **Validates eagerly** — reports _all_ errors at once so users fix everything in one pass
 - **Passwords never leak in print/log output** — masked in `str()`/`repr()`/`fmt.Println()`/`fmt.Sprintf("%+v")` (Go: `fmt.Formatter`; Python: `pydantic.SecretStr`)
 - **Immutable after loading** — frozen Pydantic models in Python; in Go, use the returned structs as read-only
@@ -70,7 +71,9 @@ pip install sap-mcp-config
 
 ## Configuration File
 
-Create `~/.config/sap-mcp/systems.json`:
+Create `~/.config/sap-mcp/systems.json` (or `systems.yaml` — format is auto-detected by extension):
+
+### JSON
 
 ```json
 {
@@ -94,10 +97,29 @@ Create `~/.config/sap-mcp/systems.json`:
 }
 ```
 
+### YAML
+
+```yaml
+default_system: dev
+systems:
+  dev:
+    host: "https://your-sap-system:44300"
+    client: "100"
+    user: YOUR_USER
+    password: YOUR_PASSWORD
+    language: DE
+  prod:
+    host: "https://prod-sap:44300"
+    client: "200"
+    user: PROD_USER
+    password: PROD_PASSWORD
+    language: EN
+```
+
 Override the config file location via the `SAP_CONFIG_FILE` environment variable:
 
 ```bash
-export SAP_CONFIG_FILE=/path/to/my/config.json
+export SAP_CONFIG_FILE=/path/to/my/config.yaml
 ```
 
 This also works from a `.env` file in the current directory.
