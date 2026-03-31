@@ -199,6 +199,25 @@ func TestParseYAML(t *testing.T) {
 	assert.Equal(t, "EN", cfg.Systems["s"].Language) // default applied
 }
 
+func TestYAMLUnquotedClient(t *testing.T) {
+	data := []byte("default_system: s\nsystems:\n  s:\n    host: \"https://x:443\"\n    client: 100\n    user: u\n    password: p\n")
+	cfg, err := sapmcpconfig.ParseYAML(data)
+	require.NoError(t, err)
+	assert.Equal(t, "100", cfg.Systems["s"].Client)
+}
+
+func TestYAMLSpecialCharacters(t *testing.T) {
+	cfg, err := sapmcpconfig.Load("testdata/special_characters.yaml")
+	require.NoError(t, err)
+
+	tricky := cfg.Systems["tricky"]
+	assert.Equal(t, "p@ss:word#with!special&chars", tricky.Password)
+
+	backslash := cfg.Systems["backslash"]
+	assert.Equal(t, `DOMAIN\USER`, backslash.User)
+	assert.Equal(t, `pass\word\with\backslashes`, backslash.Password)
+}
+
 func TestLoadYMLExtension(t *testing.T) {
 	// Copy the YAML fixture with .yml extension to verify extension detection.
 	data, err := os.ReadFile("testdata/systems.yaml")

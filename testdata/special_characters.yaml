@@ -1,0 +1,14 @@
+default_system: tricky
+systems:
+  tricky:
+    host: "https://sap.example.com:44300"
+    client: "100"
+    user: SAP_USER
+    password: "p@ss:word#with!special&chars"
+    language: EN
+  backslash:
+    host: "https://sap3.example.com:44300"
+    client: "300"
+    user: "DOMAIN\\USER"
+    password: "pass\\word\\with\\backslashes"
+    language: EN

@@ -29,7 +29,7 @@ class SAPSystem(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     host: str = ""
-    client: str = ""
+    client: Annotated[str, BeforeValidator(lambda v: str(v) if isinstance(v, (int, float)) else v)] = ""
     user: str = ""
     password: SecretStr = SecretStr("")
     language: Language = "EN"

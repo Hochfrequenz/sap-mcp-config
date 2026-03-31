@@ -201,6 +201,27 @@ class TestParseYAML:
             parse_yaml("just a string")
 
 
+class TestYAMLUnquotedClient:
+    """YAML users may write client: 100 (no quotes). Must coerce to string."""
+
+    def test_unquoted_client_coerced_to_string(self) -> None:
+        data = "default_system: s\nsystems:\n  s:\n    host: 'https://x:443'\n    client: 100\n    user: u\n    password: p\n"
+        cfg = parse_yaml(data)
+        assert cfg.systems["s"].client == "100"
+        assert isinstance(cfg.systems["s"].client, str)
+
+
+class TestYAMLSpecialCharacters:
+    """YAML has its own special characters (:, #, etc.) that need quoting."""
+
+    def test_special_characters_yaml(self) -> None:
+        testdata_special_yaml = Path(__file__).resolve().parent.parent / "testdata" / "special_characters.yaml"
+        cfg = load(testdata_special_yaml)
+        assert cfg.systems["tricky"].password.get_secret_value() == "p@ss:word#with!special&chars"
+        assert cfg.systems["backslash"].user == "DOMAIN\\USER"
+        assert cfg.systems["backslash"].password.get_secret_value() == "pass\\word\\with\\backslashes"
+
+
 class TestLoadYMLExtension:
     def test_yml_extension_detected(self, tmp_path: Path) -> None:
         src = TESTDATA_YAML.read_bytes()
