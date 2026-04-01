@@ -50,7 +50,11 @@ func (s SAPSystem) String() string {
 	if s.Password != "" {
 		pwd = "***"
 	}
-	return fmt.Sprintf("SAPSystem{ConnectionName:%s Host:%s Client:%s User:%s Password:%s Language:%s}", s.ConnectionName, s.Host, s.Client, s.User, pwd, s.Language)
+	prefix := ""
+	if s.ConnectionName != "" {
+		prefix = "ConnectionName:" + s.ConnectionName + " "
+	}
+	return fmt.Sprintf("SAPSystem{%sHost:%s Client:%s User:%s Password:%s Language:%s}", prefix, s.Host, s.Client, s.User, pwd, s.Language)
 }
 
 // Format implements fmt.Formatter to ensure the password is masked for all
