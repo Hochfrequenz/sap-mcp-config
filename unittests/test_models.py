@@ -22,6 +22,7 @@ class TestLoadTestFixture:
         assert len(cfg.systems) == 3
 
         dev = cfg.systems["dev"]
+        assert dev.connection_name == "DEV - ERP Development"
         assert dev.host == "https://dev-sap.example.com:44300"
         assert dev.client == "100"
         assert dev.user == "DEV_USER"
@@ -31,6 +32,7 @@ class TestLoadTestFixture:
         assert dev.is_oauth2 is False
 
         prod = cfg.systems["prod"]
+        assert prod.connection_name == "PROD - ERP Production"
         assert prod.host == "https://prod-sap.example.com:44300"
         assert prod.client == "200"
         assert prod.user == "PROD_USER"
@@ -40,6 +42,7 @@ class TestLoadTestFixture:
         assert prod.is_oauth2 is False
 
         oauth = cfg.systems["oauth"]
+        assert oauth.connection_name == "OAuth System"
         assert oauth.host == "https://oauth-sap.example.com:44300"
         assert oauth.client == "300"
         assert oauth.user == ""
@@ -159,6 +162,7 @@ class TestLoadYAMLFixture:
         assert len(cfg.systems) == 3
 
         dev = cfg.systems["dev"]
+        assert dev.connection_name == "DEV - ERP Development"
         assert dev.host == "https://dev-sap.example.com:44300"
         assert dev.client == "100"
         assert dev.user == "DEV_USER"
@@ -167,6 +171,7 @@ class TestLoadYAMLFixture:
         assert dev.tls_skip_verify is True
 
         oauth = cfg.systems["oauth"]
+        assert oauth.connection_name == "OAuth System"
         assert oauth.is_oauth2 is True
         assert oauth.oauth2_client_id == "my-mcp-client"
 
@@ -180,6 +185,7 @@ class TestYAMLMatchesJSON:
         assert len(json_cfg.systems) == len(yaml_cfg.systems)
         for name, json_sys in json_cfg.systems.items():
             yaml_sys = yaml_cfg.systems[name]
+            assert json_sys.connection_name == yaml_sys.connection_name
             assert json_sys.host == yaml_sys.host
             assert json_sys.client == yaml_sys.client
             assert json_sys.user == yaml_sys.user
@@ -301,7 +307,7 @@ class TestExtensibility:
             """Extended system with a custom field."""
 
             model_config = {}  # unfreeze for subclass
-            connection_name: str = ""
+            custom_timeout: int = 30
 
         sys = MySAPSystem(
             host="https://sap:44300",
@@ -309,7 +315,9 @@ class TestExtensibility:
             user="u",
             password="p",
             connection_name="HF S/4",
+            custom_timeout=60,
         )
         assert sys.connection_name == "HF S/4"
+        assert sys.custom_timeout == 60
         assert sys.host == "https://sap:44300"
         assert sys.password.get_secret_value() == "p"

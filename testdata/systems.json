@@ -2,6 +2,7 @@
   "default_system": "dev",
   "systems": {
     "dev": {
+      "connection_name": "DEV - ERP Development",
       "host": "https://dev-sap.example.com:44300",
       "client": "100",
       "user": "DEV_USER",
@@ -10,6 +11,7 @@
       "tls_skip_verify": true
     },
     "prod": {
+      "connection_name": "PROD - ERP Production",
       "host": "https://prod-sap.example.com:44300",
       "client": "200",
       "user": "PROD_USER",
@@ -18,6 +20,7 @@
       "tls_skip_verify": false
     },
     "oauth": {
+      "connection_name": "OAuth System",
       "host": "https://oauth-sap.example.com:44300",
       "client": "300",
       "language": "EN",
