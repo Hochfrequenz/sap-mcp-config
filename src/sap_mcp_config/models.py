@@ -19,6 +19,10 @@ Language = Annotated[Literal["DE", "EN"], BeforeValidator(lambda v: v.upper() if
 class SAPSystem(BaseModel):
     """A single SAP system's connection details and credentials.
 
+    The ``connection_name`` field stores the SAP Logon connection entry name
+    (the bold description text in the SAP Logon pad).  It is independent of
+    the dictionary key under which this system is stored in :class:`Config`.
+
     Either both ``user`` and ``password`` must be set, or neither (for OAuth2).
 
     The ``password`` field is a :class:`~pydantic.SecretStr` so that it is
@@ -28,6 +32,7 @@ class SAPSystem(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    connection_name: str = ""
     host: str = ""
     client: Annotated[str, BeforeValidator(lambda v: str(v) if isinstance(v, (int, float)) else v)] = ""
     user: str = ""

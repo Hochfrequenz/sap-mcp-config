@@ -19,6 +19,7 @@ func TestLoadTestFixture(t *testing.T) {
 	assert.Len(t, cfg.Systems, 3)
 
 	dev := cfg.Systems["dev"]
+	assert.Equal(t, "DEV - ERP Development", dev.ConnectionName)
 	assert.Equal(t, "https://dev-sap.example.com:44300", dev.Host)
 	assert.Equal(t, "100", dev.Client)
 	assert.Equal(t, "DEV_USER", dev.User)
@@ -28,6 +29,7 @@ func TestLoadTestFixture(t *testing.T) {
 	assert.False(t, dev.IsOAuth2())
 
 	prod := cfg.Systems["prod"]
+	assert.Equal(t, "PROD - ERP Production", prod.ConnectionName)
 	assert.Equal(t, "https://prod-sap.example.com:44300", prod.Host)
 	assert.Equal(t, "200", prod.Client)
 	assert.Equal(t, "PROD_USER", prod.User)
@@ -37,6 +39,7 @@ func TestLoadTestFixture(t *testing.T) {
 	assert.False(t, prod.IsOAuth2())
 
 	oauth := cfg.Systems["oauth"]
+	assert.Equal(t, "OAuth System", oauth.ConnectionName)
 	assert.Equal(t, "https://oauth-sap.example.com:44300", oauth.Host)
 	assert.Equal(t, "300", oauth.Client)
 	assert.Equal(t, "", oauth.User)
@@ -162,6 +165,7 @@ func TestLoadYAMLFixture(t *testing.T) {
 	assert.Len(t, cfg.Systems, 3)
 
 	dev := cfg.Systems["dev"]
+	assert.Equal(t, "DEV - ERP Development", dev.ConnectionName)
 	assert.Equal(t, "https://dev-sap.example.com:44300", dev.Host)
 	assert.Equal(t, "100", dev.Client)
 	assert.Equal(t, "DEV_USER", dev.User)
@@ -170,6 +174,7 @@ func TestLoadYAMLFixture(t *testing.T) {
 	assert.True(t, dev.TLSSkipVerify)
 
 	oauth := cfg.Systems["oauth"]
+	assert.Equal(t, "OAuth System", oauth.ConnectionName)
 	assert.True(t, oauth.IsOAuth2())
 	assert.Equal(t, "my-mcp-client", oauth.OAuth2ClientID)
 }
@@ -272,6 +277,7 @@ func TestPasswordMaskedInString(t *testing.T) {
 	str := dev.String()
 	assert.NotContains(t, str, "dev_secret")
 	assert.Contains(t, str, "***")
+	assert.Contains(t, str, "ConnectionName:DEV - ERP Development")
 
 	// Also check fmt.Sprintf which uses String() via Format()
 	formatted := fmt.Sprintf("%v", dev)

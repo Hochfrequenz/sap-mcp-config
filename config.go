@@ -28,6 +28,7 @@ var yamlExtensions = map[string]bool{".yaml": true, ".yml": true}
 // Always obtain instances through [Load], [LoadDefault], or [Parse] to ensure
 // all fields are validated.
 type SAPSystem struct {
+	ConnectionName string `json:"connection_name,omitempty" yaml:"connection_name,omitempty"`
 	Host           string `json:"host" yaml:"host"`
 	Client         string `json:"client" yaml:"client"`
 	User           string `json:"user,omitempty" yaml:"user,omitempty"`
@@ -49,7 +50,11 @@ func (s SAPSystem) String() string {
 	if s.Password != "" {
 		pwd = "***"
 	}
-	return fmt.Sprintf("SAPSystem{Host:%s Client:%s User:%s Password:%s Language:%s}", s.Host, s.Client, s.User, pwd, s.Language)
+	prefix := ""
+	if s.ConnectionName != "" {
+		prefix = "ConnectionName:" + s.ConnectionName + " "
+	}
+	return fmt.Sprintf("SAPSystem{%sHost:%s Client:%s User:%s Password:%s Language:%s}", prefix, s.Host, s.Client, s.User, pwd, s.Language)
 }
 
 // Format implements fmt.Formatter to ensure the password is masked for all

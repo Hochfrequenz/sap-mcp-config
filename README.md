@@ -80,6 +80,7 @@ Create `~/.config/sap-mcp/systems.json` (or `systems.yaml` — format is auto-de
   "default_system": "dev",
   "systems": {
     "dev": {
+      "connection_name": "DEV - ERP Development",
       "host": "https://your-sap-system:44300",
       "client": "100",
       "user": "YOUR_USER",
@@ -87,6 +88,7 @@ Create `~/.config/sap-mcp/systems.json` (or `systems.yaml` — format is auto-de
       "language": "DE"
     },
     "prod": {
+      "connection_name": "PROD - ERP Production",
       "host": "https://prod-sap:44300",
       "client": "200",
       "user": "PROD_USER",
@@ -103,12 +105,14 @@ Create `~/.config/sap-mcp/systems.json` (or `systems.yaml` — format is auto-de
 default_system: dev
 systems:
   dev:
+    connection_name: "DEV - ERP Development"
     host: "https://your-sap-system:44300"
     client: "100"
     user: YOUR_USER
     password: YOUR_PASSWORD
     language: DE
   prod:
+    connection_name: "PROD - ERP Production"
     host: "https://prod-sap:44300"
     client: "200"
     user: PROD_USER
@@ -128,6 +132,7 @@ This also works from a `.env` file in the current directory.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `connection_name` | string | no | `""` | SAP Logon connection entry name — must match the **bold description text** shown in the SAP Logon pad, not the System ID (SID). Used by desktop backends (e.g. SAP GUI) to open the correct connection. |
 | `host` | string | yes | | SAP system base URL (must start with `http://` or `https://`) |
 | `client` | string | no | `""` | SAP client/mandant, must be exactly 3 digits (e.g. `"100"`) |
 | `user` | string | conditional | `""` | SAP username (omit for OAuth2) |
@@ -136,9 +141,35 @@ This also works from a `.env` file in the current directory.
 | `tls_skip_verify` | bool | no | `false` | Skip TLS certificate verification |
 | `oauth2_client_id` | string | no | `""` | OAuth2 client ID for token-based auth |
 
+**Important:** The dictionary key (e.g. `"dev"`, `"prod"`) is only used to look up systems in the config. It has no connection to the SAP system itself. The `connection_name` field is what identifies the SAP Logon entry for desktop backends. This distinction allows you to configure multiple entries for the same SAP system with different clients or credentials:
+
+```json
+{
+  "default_system": "dev-100",
+  "systems": {
+    "dev-100": {
+      "connection_name": "DEV - ERP Development",
+      "host": "https://dev-sap.example.com:44300",
+      "client": "100",
+      "user": "DEV_USER",
+      "password": "DEV_PASSWORD"
+    },
+    "dev-200": {
+      "connection_name": "DEV - ERP Development",
+      "host": "https://dev-sap.example.com:44300",
+      "client": "200",
+      "user": "QA_USER",
+      "password": "QA_PASSWORD"
+    }
+  }
+}
+```
+
+Both entries share the same `connection_name` (same SAP Logon entry) but use different clients and credentials.
+
 **Validation rules:**
 - At least one system must be defined
-- `default_system` must reference an existing system
+- `default_system` must reference an existing system key
 - `host` is required and must start with `http://` or `https://`
 - `client`, if set, must be exactly 3 digits
 - `language`, if set, must be `"DE"` or `"EN"`
@@ -175,7 +206,7 @@ func main() {
     fmt.Println(prod.Host, prod.Client, prod.User)
 
     // Password is safe to print — it won't leak
-    fmt.Println(dev) // Output: SAPSystem{Host:https://... Client:100 User:DEV_USER Password:*** Language:DE}
+    fmt.Println(dev) // Output: SAPSystem{ConnectionName:DEV - ERP Development Host:https://... Client:100 User:DEV_USER Password:*** Language:DE}
 }
 ```
 
@@ -253,7 +284,6 @@ from sap_mcp_config import SAPSystem
 class MySAPSystem(SAPSystem):
     model_config = ConfigDict()  # unfreeze for subclass
 
-    connection_name: str = ""
     custom_timeout: int = 30
 ```
 
@@ -264,8 +294,7 @@ Embed `SAPSystem` in your own struct:
 ```go
 type MySAPSystem struct {
     sapmcpconfig.SAPSystem
-    ConnectionName string `json:"connection_name"`
-    CustomTimeout  int    `json:"custom_timeout"`
+    CustomTimeout int `json:"custom_timeout"`
 }
 ```
 
