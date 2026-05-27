@@ -151,6 +151,8 @@ Open the SAP Logon pad — your systems appear in a table. The `connection_name`
 | **DEV - ERP Development**                   | DEV             | 00              | dev-ms…        |
 | **QA System**                               | QAS             | 01              | qa-ms…         |
 
+![](saplogon.png)
+
 Copy the Description/Name text exactly as it appears — spaces, slashes, and capitalisation all matter. If the value in `connection_name` doesn't match exactly, the server will return _"SAP Logon connection entry not found"_.
 
 > **Note:** `connection_name` is only used by the **Desktop backend** (SAP GUI desktop client). The WebGUI backend connects directly to `host` and does not use SAP Logon, so you can leave `connection_name` empty or omit it.
