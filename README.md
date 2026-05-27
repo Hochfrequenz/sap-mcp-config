@@ -136,7 +136,7 @@ Open the SAP Logon pad - your systems appear in a table. The `connection_name` i
 | **DEV - ERP Development**                            | DEV             | 00              | dev-ms...      |
 | **QA System**                                        | QAS             | 01              | qa-ms...       |
 
-![](saplogon.png)
+![SAP Logon pad showing Description/Name, System ID, Instance Number, and Message Server columns](saplogon.png)
 
 > [!IMPORTANT]
 > Copy the Description/Name text exactly as it appears - spaces, slashes, and capitalisation all matter. If the value in `connection_name` doesn't match exactly, the server will return _"SAP Logon connection entry not found"_.
@@ -144,7 +144,7 @@ Open the SAP Logon pad - your systems appear in a table. The `connection_name` i
 > [!NOTE]
 > `connection_name` is only used by the **Desktop backend** (SAP GUI desktop client). The WebGUI backend connects directly to `host` and does not use SAP Logon, so you can leave `connection_name` empty or omit it.
 
-**Multiple entries for the same SAP system:**
+#### Multiple entries for the same SAP system
 
 The dictionary key (e.g. `"dev"`, `"prod"`) is only used to look up systems in the config. It has no connection to the SAP system itself. The `connection_name` field is what identifies the SAP Logon entry for desktop backends. This distinction allows you to configure multiple entries for the same SAP system with different clients or credentials:
 
@@ -174,7 +174,7 @@ Both entries share the same `connection_name` (same SAP Logon entry) but use dif
 
 ### MCP JSON Configuration
 
-This package integrates naturally with the [MCP JSON configuration standard](https://modelcontextprotocol.io/docs/concepts/transports). Point your MCP server to the shared config file via the `SAP_CONFIG_FILE` environment variable:
+Once your `systems.json` is ready, whoever configured the MCP server needs to point it at the credentials file. This uses the [MCP JSON configuration standard](https://modelcontextprotocol.io/docs/concepts/transports) - set `SAP_CONFIG_FILE` in the MCP server environment:
 
 ```json
 {
@@ -335,7 +335,7 @@ type MySAPSystem struct {
 go test ./...
 ```
 
-### Error Messages
+### 2c) Error Messages (Python and Go)
 
 Both implementations validate eagerly and return **all** errors at once. A misconfigured file like this:
 
@@ -358,5 +358,3 @@ invalid configuration:
   - system "dev": must have both user and password, or neither (for OAuth2)
 ```
 
-> [!TIP]
-> All errors are reported at once so users fix everything in one pass instead of one by one.
