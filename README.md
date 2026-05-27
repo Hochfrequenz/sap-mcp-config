@@ -143,15 +143,15 @@ This also works from a `.env` file in the current directory.
 
 ### Finding your `connection_name` in SAP Logon
 
-Open the SAP Logon pad — your systems appear in a table. The `connection_name` is the text in the **Description** column (the leftmost column with the bold/display name). It is **not** the short System ID (SID):
+Open the SAP Logon pad — your systems appear in a table. The `connection_name` is the text in the **Description** or **Name** column (the leftmost column with the bold/display name). It is **not** the short System ID (SID):
 
-| Description ← use this as `connection_name` | System ID (SID) | Instance Number | Message Server |
+| Description or Name ← use this as `connection_name` | System ID (SID) | Instance Number | Message Server |
 | ------------------------------------------- | --------------- | --------------- | -------------- |
 | **Production S/4HANA**                      | PRD             | 00              | prd-ms…        |
 | **DEV - ERP Development**                   | DEV             | 00              | dev-ms…        |
 | **QA System**                               | QAS             | 01              | qa-ms…         |
 
-Copy the Description text exactly as it appears — spaces, slashes, and capitalisation all matter. If the value in `connection_name` doesn't match exactly, the server will return _"SAP Logon connection entry not found"_.
+Copy the Description/Name text exactly as it appears — spaces, slashes, and capitalisation all matter. If the value in `connection_name` doesn't match exactly, the server will return _"SAP Logon connection entry not found"_.
 
 > **Note:** `connection_name` is only used by the **Desktop backend** (SAP GUI desktop client). The WebGUI backend connects directly to `host` and does not use SAP Logon, so you can leave `connection_name` empty or omit it.
 
