@@ -132,7 +132,7 @@ This also works from a `.env` file in the current directory.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `connection_name` | string | no | `""` | SAP Logon connection entry name — must match the **bold description text** shown in the SAP Logon pad, not the System ID (SID). Used by desktop backends (e.g. SAP GUI) to open the correct connection. |
+| `connection_name` | string | no | `""` | SAP Logon connection entry name — must match the **bold description text** shown in the SAP Logon pad, not the System ID (SID). Used by desktop backends (e.g. SAP GUI) to open the correct connection. (See [Finding your connection_name](#finding-your-connection_name-in-sap-logon) below.) |
 | `host` | string | yes | | SAP system base URL (must start with `http://` or `https://`) |
 | `client` | string | no | `""` | SAP client/mandant, must be exactly 3 digits (e.g. `"100"`) |
 | `user` | string | conditional | `""` | SAP username (omit for OAuth2) |
@@ -140,6 +140,20 @@ This also works from a `.env` file in the current directory.
 | `language` | string | no | `"EN"` | Login language: `"DE"` or `"EN"` |
 | `tls_skip_verify` | bool | no | `false` | Skip TLS certificate verification |
 | `oauth2_client_id` | string | no | `""` | OAuth2 client ID for token-based auth |
+
+### Finding your `connection_name` in SAP Logon
+
+Open the SAP Logon pad — your systems appear in a table. The `connection_name` is the text in the **Description** column (the leftmost column with the bold/display name). It is **not** the short System ID (SID):
+
+| Description ← use this as `connection_name` | System ID (SID) | Instance Number | Message Server |
+| ------------------------------------------- | --------------- | --------------- | -------------- |
+| **Production S/4HANA**                      | PRD             | 00              | prd-ms…        |
+| **DEV - ERP Development**                   | DEV             | 00              | dev-ms…        |
+| **QA System**                               | QAS             | 01              | qa-ms…         |
+
+Copy the Description text exactly as it appears — spaces, slashes, and capitalisation all matter. If the value in `connection_name` doesn't match exactly, the server will return _"SAP Logon connection entry not found"_.
+
+> **Note:** `connection_name` is only used by the **Desktop backend** (SAP GUI desktop client). The WebGUI backend connects directly to `host` and does not use SAP Logon, so you can leave `connection_name` empty or omit it.
 
 **Important:** The dictionary key (e.g. `"dev"`, `"prod"`) is only used to look up systems in the config. It has no connection to the SAP system itself. The `connection_name` field is what identifies the SAP Logon entry for desktop backends. This distinction allows you to configure multiple entries for the same SAP system with different clients or credentials:
 
