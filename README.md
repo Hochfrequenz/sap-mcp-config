@@ -16,7 +16,7 @@
 
 ---
 
-## 0) General
+## General
 
 If you're building an MCP server that connects to SAP, use this package. It gives you validated, type-safe configuration in both Go and Python with a single shared config file. No more reinventing credential loading, no more inconsistent formats between projects.
 
@@ -40,7 +40,7 @@ MIT
 
 ---
 
-## 1) Users
+## Users
 
 This section covers everything you need to connect an MCP server to your SAP system. No programming knowledge required.
 
@@ -200,11 +200,11 @@ Once your `systems.json` is ready, whoever configured the MCP server needs to po
 
 ---
 
-## 2) Developers
+## Developers
 
 This section is for developers building or extending MCP servers that use this package.
 
-### 2a) Python
+### Python
 
 #### Installation
 
@@ -277,7 +277,7 @@ tox -e type_check  # mypy --strict
 tox -e coverage    # coverage with 80% minimum
 ```
 
-### 2b) Go
+### Go
 
 #### Installation
 
@@ -335,7 +335,7 @@ type MySAPSystem struct {
 go test ./...
 ```
 
-### 2c) Error Messages (Python and Go)
+### Error Messages (Python and Go)
 
 Both implementations validate eagerly and return **all** errors at once. A misconfigured file like this:
 
