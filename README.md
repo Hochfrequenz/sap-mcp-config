@@ -45,7 +45,7 @@ MIT
 This section covers everything you need to connect an MCP server to your SAP system. No programming knowledge required.
 
 > [!NOTE]
-> **Why a separate file for credentials?** Most MCP tools put credentials directly in each project's MCP config (`env` block), which means re-entering them for every tool you install. This package separates SAP credentials into a single shared file (`systems.json`) so that multiple MCP servers - like [`sapgui.mcp`](https://github.com/Hochfrequenz/sapwebgui.mcp) and [`mcp-server-abap`](https://github.com/Hochfrequenz/mcp-server-abap) - can all read the same credentials without duplication.
+> **Why a separate file for credentials?** Most MCP tools put credentials directly in each project's MCP config (`env` block), which means re-entering them for every tool you install. This package separates SAP credentials into a single shared file (`systems.json`) so that multiple MCP servers - like [`sapgui.mcp`](https://github.com/Hochfrequenz/sapgui.mcp) and [`mcp-server-abap`](https://github.com/Hochfrequenz/mcp-server-abap) - can all read the same credentials without duplication.
 
 ### Configuration File
 
