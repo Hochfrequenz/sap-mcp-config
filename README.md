@@ -20,7 +20,7 @@
 
 If you're building an MCP server that connects to SAP, use this package. It gives you validated, type-safe configuration in both Go and Python with a single shared config file. No more reinventing credential loading, no more inconsistent formats between projects.
 
-Both [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap) (Go) and [sapwebgui.mcp](https://github.com/Hochfrequenz/sapwebgui.mcp) (Python) use this package.
+Both [mcp-server-abap](https://github.com/Hochfrequenz/mcp-server-abap) (Go) and [sapgui.mcp](https://github.com/Hochfrequenz/sapgui.mcp) (Python) use this package.
 
 The default config path (`~/.config/sap-mcp/systems.json`) follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/).
 
@@ -189,7 +189,7 @@ Once your `systems.json` is ready, whoever configured the MCP server needs to po
       }
     },
     "sap-webgui": {
-      "command": "sapwebgui-mcp",
+      "command": "run-sapgui-mcp-server",
       "env": {
         "SAP_CONFIG_FILE": "/home/user/.config/sap-mcp/systems.json"
       }
