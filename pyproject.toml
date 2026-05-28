@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Hochfrequenz Unternehmensberatung GmbH", email = "info+github@hochfrequenz.de" }]
 keywords = ["sap", "mcp", "configuration"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
