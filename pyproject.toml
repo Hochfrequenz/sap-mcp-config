@@ -24,32 +24,6 @@ dependencies = [
 ]
 dynamic = ["readme", "version"]
 
-[project.optional-dependencies]
-tests = [
-    "pytest==9.1.1",
-]
-linting = [
-    "pylint==4.0.6",
-]
-type_check = [
-    "mypy==2.3.0",
-    "types-PyYAML>=6",
-]
-spell_check = [
-    "codespell==2.4.3",
-]
-coverage = [
-    "coverage==7.15.2",
-]
-formatting = [
-    "black==26.5.1",
-    "isort==8.0.1",
-]
-packaging = [
-    "build==1.5.1",
-    "twine==6.2.0",
-]
-
 [project.urls]
 Changelog = "https://github.com/Hochfrequenz/sap-mcp-config/releases"
 Homepage = "https://github.com/Hochfrequenz/sap-mcp-config"
@@ -68,6 +42,42 @@ max-line-length = 120
 [tool.mypy]
 disable_error_code = []
 plugins = ["pydantic.mypy"]
+
+[dependency-groups]
+tests = [
+    "pytest==9.1.1",
+]
+linting = [
+    "pylint==4.0.6",
+    {include-group = "tests"},
+]
+type_check = [
+    "mypy==2.3.0",
+    "types-PyYAML>=6",
+    {include-group = "tests"},
+]
+spell_check = [
+    "codespell==2.4.3",
+]
+coverage = [
+    "coverage==7.15.2",
+    {include-group = "tests"},
+]
+formatting = [
+    "black==26.5.1",
+    "isort==8.0.1",
+]
+dev = [
+    {include-group = "tests"},
+    {include-group = "linting"},
+    {include-group = "type_check"},
+    {include-group = "spell_check"},
+    {include-group = "coverage"},
+    {include-group = "formatting"},
+]
+
+[tool.uv]
+default-groups = []
 
 [build-system]
 requires = ["hatchling>=1.8.0", "hatch-vcs", "hatch-fancy-pypi-readme"]
