@@ -274,7 +274,7 @@ Or run individual checks:
 
 ```bash
 uv run --group tests pytest unittests             # unit tests
-uv run --group linting pylint sap_mcp_config       # pylint
+uv run --group linting ruff check src/sap_mcp_config  # ruff
 uv run --group type_check mypy --strict src/sap_mcp_config  # mypy --strict
 uv run --group coverage coverage run -m pytest unittests    # coverage
 ```

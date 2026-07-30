@@ -14,8 +14,7 @@ jobs:
         include:
           - linter-env: linting
             commands: |
-              uv run pylint sap_mcp_config
-              uv run pylint unittests --rcfile=unittests/.pylintrc
+              uv run ruff check src/sap_mcp_config unittests
           - linter-env: type_check
             commands: |
               uv run mypy --show-error-codes src/sap_mcp_config --strict
