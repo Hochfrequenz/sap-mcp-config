@@ -306,7 +306,7 @@ class TestExtensibility:
         class MySAPSystem(SAPSystem):
             """Extended system with a custom field."""
 
-            model_config = {}  # unfreeze for subclass
+            model_config = {}  # noqa: RUF012 -- unfreeze for subclass
             custom_timeout: int = 30
 
         sys = MySAPSystem(
