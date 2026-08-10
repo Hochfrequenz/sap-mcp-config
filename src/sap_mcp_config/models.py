@@ -48,6 +48,18 @@ _INTERPOLATED_FIELDS = ("connection_name", "host", "client", "user", "password",
 #: Key under which the :class:`_PlaceholderReport` is passed to the validator.
 _REPORT_CONTEXT_KEY = "sap_mcp_config.placeholder_report"
 
+
+def _quote(value: str) -> str:
+    """Quote *value* for an error message, escaping as Go's ``%q`` verb does.
+
+    A bare ``f'"{value}"'`` would let a quote or newline inside the value break
+    the message apart — and would disagree with the Go implementation, whose
+    messages the shared fixtures require to match.  ``ensure_ascii=False`` keeps
+    non-ASCII characters literal, which is what ``%q`` does too.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
 #: Identifies fields belonging to the config itself rather than to a system.
 #: Contains a NUL so it can never collide with a real system name — including a
 #: system literally named ``""``, whose errors must still carry a prefix.
@@ -73,8 +85,8 @@ class _PlaceholderReport(BaseModel):
     can skip fields that have no usable value and avoid echoing values that came
     from the environment.
 
-    :attr:`status` is keyed by system name and then field name; the empty system
-    name holds the top-level ``default_system`` entry.
+    :attr:`status` is keyed by system name and then field name;
+    :data:`_TOP_LEVEL_KEY` holds the ``default_system`` entry.
     """
 
     messages: list[str] = []
@@ -96,13 +108,13 @@ class _PlaceholderReport(BaseModel):
         """
         if self.get(system, field).from_env:
             return "the value taken from the environment"
-        return f'"{value}"'
+        return _quote(value)
 
     def _add(self, system: str, field: str, detail: str) -> None:
         if system == _TOP_LEVEL_KEY:
             self.messages.append(f"{field} {detail}")
         else:
-            self.messages.append(f'system "{system}": {field} {detail}')
+            self.messages.append(f"system {_quote(system)}: {field} {detail}")
 
     def resolve(self, system: str, field: str, value: str) -> str:
         """Replace every ``${env:VAR}`` in *value* and record what happened.
@@ -252,25 +264,25 @@ class Config(BaseModel):
             # deliberate OAuth2 system.
             if not report.unusable(name, "host"):
                 if not sys.host:
-                    errs.append(f'system "{name}": host is required')
+                    errs.append(f"system {_quote(name)}: host is required")
                 elif not sys.host.startswith(("http://", "https://")):
                     described = report.describe(name, "host", sys.host)
-                    errs.append(f'system "{name}": host must start with http:// or https://, got {described}')
+                    errs.append(f"system {_quote(name)}: host must start with http:// or https://, got {described}")
             if (
                 not report.unusable(name, "client")
                 and sys.client
                 and (len(sys.client) != 3 or not sys.client.isdigit())
             ):
                 described = report.describe(name, "client", sys.client)
-                errs.append(f'system "{name}": client must be a 3-digit string (e.g. "100"), got {described}')
+                errs.append(f'system {_quote(name)}: client must be a 3-digit string (e.g. "100"), got {described}')
             pwd = sys.password.get_secret_value()
             if not (report.unusable(name, "user") or report.unusable(name, "password")) and (sys.user == "") != (
                 pwd == ""
             ):
-                errs.append(f'system "{name}": must have both user and password, or neither (for OAuth2)')
+                errs.append(f"system {_quote(name)}: must have both user and password, or neither (for OAuth2)")
             if not report.unusable(name, "language") and sys.language not in ("DE", "EN"):
                 described = report.describe(name, "language", sys.language)
-                errs.append(f'system "{name}": language must be "DE" or "EN", got {described}')
+                errs.append(f'system {_quote(name)}: language must be "DE" or "EN", got {described}')
         if errs:
             raise ValueError("invalid configuration:\n  - " + "\n  - ".join(errs))
         return self

@@ -504,6 +504,19 @@ class TestEnvPlaceholders:
         cfg = load_default()
         assert cfg.systems["a"].password.get_secret_value() == "from-dotenv"
 
+    def test_message_quoting_escapes_like_go(self) -> None:
+        """A quote or newline in a value must not break the message apart — and must match Go's %q."""
+        data = json.dumps(
+            {
+                "default_system": "a",
+                "systems": {"a": {"host": 'ftp://ho"st\nline', "client": "100", "user": "u", "password": "p"}},
+            }
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        # Byte-identical to the Go assertion in TestErrorQuotingEscapesSpecialCharacters.
+        assert r'got "ftp://ho\"st\nline"' in exc_info.value.errors()[0]["msg"]
+
     def test_literal_values_are_still_echoed(self) -> None:
         """A value written in the file is not a secret we hid from the user — keep echoing it."""
         data = '{"default_system":"a","systems":{"a":{"host":"ftp://written-in-file","user":"u","password":"p"}}}'

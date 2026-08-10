@@ -453,6 +453,22 @@ func TestInvalidLanguageReportsNormalizedValue(t *testing.T) {
 	assert.Contains(t, err.Error(), `language must be "DE" or "EN", got "FR"`)
 }
 
+// TestErrorQuotingEscapesSpecialCharacters pins that a quote or newline in a
+// value cannot break the message apart. Python asserts the identical string in
+// test_message_quoting_escapes_like_go.
+func TestErrorQuotingEscapesSpecialCharacters(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"default_system": "a",
+		"systems": map[string]any{
+			"a": map[string]any{"host": "ftp://ho\"st\nline", "client": "100", "user": "u", "password": "p"},
+		},
+	})
+	require.NoError(t, err)
+	_, err = sapmcpconfig.Parse(data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `got "ftp://ho\"st\nline"`)
+}
+
 // TestErrorOrderIsDeterministic guards against Go's randomized map iteration
 // leaking into the reported message order, which Python never does.
 func TestErrorOrderIsDeterministic(t *testing.T) {
