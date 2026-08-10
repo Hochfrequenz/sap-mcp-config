@@ -197,7 +197,7 @@ invalid configuration:
 > [!NOTE]
 > Values taken from the environment are not echoed back in error messages. Where a literal from the file would be quoted - `host must start with http:// or https://, got "ftp://x"` - an env-supplied value is reported as `got the value taken from the environment` instead.
 >
-> In Python this applies to the message text. `pydantic.ValidationError` separately includes the raw input it was given, which has always contained whatever the config held, so avoid printing the full exception in contexts where that matters.
+> This includes the exception itself: because interpolation happens before validation, the document handed to the validator holds resolved secrets, so `load()`, `parse()` and `parse_yaml()` raise a `ValidationError` with its `input` withheld. Printing the full exception is safe.
 
 ### Finding your `connection_name` in SAP Logon
 

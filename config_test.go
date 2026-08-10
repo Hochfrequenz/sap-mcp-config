@@ -422,6 +422,51 @@ func TestUnresolvedInAllPlaceholderFields(t *testing.T) {
 	assert.Contains(t, err.Error(), "oauth2_client_id references ${env:SAP_MCP_TEST_OA}")
 }
 
+// TestEnvDerivedDefaultSystemIsNotEchoed pins that default_system gets the same
+// withholding treatment as every other field.
+func TestEnvDerivedDefaultSystemIsNotEchoed(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_DEF_NAME", "secret-system-name")
+	data := `{"default_system":"${env:SAP_MCP_TEST_DEF_NAME}","systems":{"dev":{"host":"https://x","client":"100","user":"u","password":"p"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret-system-name")
+	assert.Contains(t, err.Error(), "the value taken from the environment")
+}
+
+// TestSystemNamedEmptyStringIsStillPrefixed guards the sentinel: a system
+// literally named "" must not render like a top-level field error.
+func TestSystemNamedEmptyStringIsStillPrefixed(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_EMPTY_NAME", "")
+	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_EMPTY_NAME"))
+	data := `{"default_system":"dev","systems":{"":{"host":"${env:SAP_MCP_TEST_EMPTY_NAME}"},"dev":{"host":"https://x","client":"100","user":"u","password":"p"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `system "": host references ${env:SAP_MCP_TEST_EMPTY_NAME}`)
+}
+
+// TestInvalidLanguageReportsNormalizedValue keeps the message identical to
+// Python's, whose BeforeValidator has already uppercased the field.
+func TestInvalidLanguageReportsNormalizedValue(t *testing.T) {
+	data := `{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"fr"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `language must be "DE" or "EN", got "FR"`)
+}
+
+// TestErrorOrderIsDeterministic guards against Go's randomized map iteration
+// leaking into the reported message order, which Python never does.
+func TestErrorOrderIsDeterministic(t *testing.T) {
+	data := `{"default_system":"a","systems":{"a":{"host":"ftp://one"},"b":{"host":"ftp://two"},"c":{"host":"ftp://three"},"d":{"host":"ftp://four"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	first := err.Error()
+	for i := 0; i < 50; i++ {
+		_, err := sapmcpconfig.Parse([]byte(data))
+		require.Error(t, err)
+		require.Equal(t, first, err.Error(), "message order must not vary between runs")
+	}
+}
+
 // TestEnvPlaceholderUnsetIsErrorYAML mirrors the JSON unset path, which was the
 // only one the fixtures exercised.
 func TestEnvPlaceholderUnsetIsErrorYAML(t *testing.T) {

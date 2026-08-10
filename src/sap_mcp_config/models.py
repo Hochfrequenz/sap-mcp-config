@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import yaml
-from dotenv import load_dotenv
-from pydantic import BaseModel, BeforeValidator, ConfigDict, SecretStr, ValidationInfo, model_validator
+from dotenv import find_dotenv, load_dotenv
+from pydantic import BaseModel, BeforeValidator, ConfigDict, SecretStr, ValidationError, ValidationInfo, model_validator
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 #: Default config file path when SAP_CONFIG_FILE is not set.
 DEFAULT_CONFIG_PATH = "~/.config/sap-mcp/systems.json"
@@ -46,6 +47,11 @@ _INTERPOLATED_FIELDS = ("connection_name", "host", "client", "user", "password",
 
 #: Key under which the :class:`_PlaceholderReport` is passed to the validator.
 _REPORT_CONTEXT_KEY = "sap_mcp_config.placeholder_report"
+
+#: Identifies fields belonging to the config itself rather than to a system.
+#: Contains a NUL so it can never collide with a real system name — including a
+#: system literally named ``""``, whose errors must still carry a prefix.
+_TOP_LEVEL_KEY = "\x00config"
 
 
 class _FieldStatus(BaseModel):
@@ -93,7 +99,7 @@ class _PlaceholderReport(BaseModel):
         return f'"{value}"'
 
     def _add(self, system: str, field: str, detail: str) -> None:
-        if system == "":
+        if system == _TOP_LEVEL_KEY:
             self.messages.append(f"{field} {detail}")
         else:
             self.messages.append(f'system "{system}": {field} {detail}')
@@ -149,7 +155,7 @@ def _interpolate(raw: dict[str, Any]) -> _PlaceholderReport:
     report = _PlaceholderReport()
     default_system = raw.get("default_system")
     if isinstance(default_system, str):
-        raw["default_system"] = report.resolve("", "default_system", default_system)
+        raw["default_system"] = report.resolve(_TOP_LEVEL_KEY, "default_system", default_system)
     systems = raw.get("systems")
     if isinstance(systems, dict):
         for name, system in systems.items():
@@ -192,6 +198,23 @@ class SAPSystem(BaseModel):
         """True when the system is configured for OAuth2 (no user/password)."""
         return self.user == "" and self.password.get_secret_value() == ""
 
+    @model_validator(mode="after")
+    def _validate_language(self, info: ValidationInfo) -> "SAPSystem":
+        """Reject an unknown language when this system is built on its own.
+
+        While loading a whole config the check is left to
+        :meth:`Config._validate`, which collects it together with every other
+        problem.  Failing here instead would stop that model validator from
+        running at all, so a single bad language would hide the rest of the
+        report — and disagree with Go, which lists them all.
+        """
+        context = info.context if isinstance(info.context, dict) else {}
+        if _REPORT_CONTEXT_KEY in context:
+            return self
+        if self.language not in ("DE", "EN"):
+            raise ValueError(f'language must be "DE" or "EN", got "{self.language}"')
+        return self
+
 
 class Config(BaseModel):
     """All configured SAP systems and a default system name.
@@ -217,8 +240,9 @@ class Config(BaseModel):
         errs: list[str] = list(report.messages)
         if not self.systems:
             raise ValueError("config has no systems defined")
-        if not report.unusable("", "default_system") and self.default_system not in self.systems:
-            errs.append(f'default_system "{self.default_system}" not found in systems')
+        if not report.unusable(_TOP_LEVEL_KEY, "default_system") and self.default_system not in self.systems:
+            described = report.describe(_TOP_LEVEL_KEY, "default_system", self.default_system)
+            errs.append(f"default_system {described} not found in systems")
         for name, sys in self.systems.items():
             # A field whose placeholder could not be resolved has no meaningful
             # value, so its remaining checks are skipped — reporting 'host must
@@ -256,6 +280,32 @@ class Config(BaseModel):
         return self.systems[self.default_system]
 
 
+def _validate_resolved(raw: dict[str, Any], report: _PlaceholderReport) -> Config:
+    """Validate an interpolated document without echoing it back on failure.
+
+    ``raw`` has had its placeholders resolved, so it now holds real credentials
+    that were deliberately kept out of the config file.  pydantic attaches the
+    validator's input to every error it raises, which would put those secrets
+    straight into ``str(exc)`` and ``exc.errors()[...]["input"]``.  The error is
+    therefore rebuilt with the same messages and no input.
+    """
+    try:
+        return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
+    except ValidationError as exc:
+        details: list[InitErrorDetails] = [
+            InitErrorDetails(
+                # The message is passed as context rather than inlined into the
+                # template, so that a ``${env:VAR}`` inside it is not mistaken
+                # for a placeholder of pydantic's own.
+                type=PydanticCustomError("value_error", "{message}", {"message": error["msg"]}),
+                loc=error["loc"],
+                input=None,
+            )
+            for error in exc.errors()
+        ]
+        raise ValidationError.from_exception_data(exc.title, details) from None
+
+
 def parse(data: str | bytes) -> Config:
     """Parse a JSON string or bytes into a validated Config.
 
@@ -266,7 +316,7 @@ def parse(data: str | bytes) -> Config:
     if not isinstance(raw, dict):
         raise ValueError("expected a JSON object at the top level")
     report = _interpolate(raw)
-    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
+    return _validate_resolved(raw, report)
 
 
 def parse_yaml(data: str | bytes) -> Config:
@@ -279,7 +329,7 @@ def parse_yaml(data: str | bytes) -> Config:
     if not isinstance(raw, dict):
         raise ValueError("expected a YAML mapping at the top level")
     report = _interpolate(raw)
-    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
+    return _validate_resolved(raw, report)
 
 
 _YAML_EXTENSIONS = {".yaml", ".yml"}
@@ -308,6 +358,10 @@ def load_default() -> Config:
     Loads ``.env`` files from the current directory before reading the
     environment variable.
     """
-    load_dotenv()  # best-effort; missing .env is fine
+    # usecwd=True because a bare load_dotenv() searches upwards from *this*
+    # module's directory, i.e. inside site-packages for an installed package.
+    # Go's godotenv.Load() reads ./.env, so without this the two disagree about
+    # which .env exists whenever the entry-point script lives elsewhere.
+    load_dotenv(find_dotenv(usecwd=True))  # best-effort; missing .env is fine
     path = os.environ.get("SAP_CONFIG_FILE", DEFAULT_CONFIG_PATH)
     return load(path)

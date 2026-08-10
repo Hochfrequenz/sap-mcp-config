@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -45,12 +46,17 @@ type fieldStatus struct {
 	unusable bool
 }
 
+// topLevelKey identifies fields that belong to the config itself rather than to
+// a system. It contains a NUL so it can never collide with a real system name —
+// including a system literally named "", whose errors must still be prefixed.
+const topLevelKey = "\x00config"
+
 // placeholderReport is the outcome of interpolating one config: the errors to
 // report, plus per-field status so validation can skip fields that have no
 // usable value and avoid echoing values that came from the environment.
 //
-// status is keyed by system name and then field name; the empty system name
-// holds the top-level default_system entry.
+// status is keyed by system name and then field name; topLevelKey holds the
+// default_system entry.
 type placeholderReport struct {
 	messages []string
 	status   map[string]map[string]fieldStatus
@@ -78,7 +84,7 @@ func (r placeholderReport) describe(system, field, value string) string {
 
 func (r *placeholderReport) addf(system, field, format string, args ...any) {
 	detail := fmt.Sprintf(format, args...)
-	if system == "" {
+	if system == topLevelKey {
 		r.messages = append(r.messages, field+" "+detail)
 		return
 	}
@@ -139,8 +145,12 @@ func (r *placeholderReport) resolve(system, field, value string) string {
 // a password of 007 would silently load as 7.
 func interpolateSystems(cfg *Config) placeholderReport {
 	report := placeholderReport{status: map[string]map[string]fieldStatus{}}
-	cfg.DefaultSystem = report.resolve("", "default_system", cfg.DefaultSystem)
-	for name, sys := range cfg.Systems {
+	cfg.DefaultSystem = report.resolve(topLevelKey, "default_system", cfg.DefaultSystem)
+	// Sorted, so the reported errors come out in a stable order. Ranging over the
+	// map directly makes the message order vary between runs, which Python (whose
+	// dicts keep insertion order) never does.
+	for _, name := range sortedSystemNames(cfg.Systems) {
+		sys := cfg.Systems[name]
 		sys.ConnectionName = report.resolve(name, "connection_name", sys.ConnectionName)
 		sys.Host = report.resolve(name, "host", sys.Host)
 		sys.Client = report.resolve(name, "client", sys.Client)
@@ -301,12 +311,14 @@ func (c *Config) validate(report placeholderReport) error {
 	if len(c.Systems) == 0 {
 		return fmt.Errorf("config has no systems defined")
 	}
-	if !report.unusable("", "default_system") {
+	if !report.unusable(topLevelKey, "default_system") {
 		if _, ok := c.Systems[c.DefaultSystem]; !ok {
-			errs = append(errs, fmt.Sprintf("default_system %q not found in systems", c.DefaultSystem))
+			errs = append(errs, fmt.Sprintf("default_system %s not found in systems",
+				report.describe(topLevelKey, "default_system", c.DefaultSystem)))
 		}
 	}
-	for name, sys := range c.Systems {
+	for _, name := range sortedSystemNames(c.Systems) {
+		sys := c.Systems[name]
 		// A field whose placeholder could not be resolved has no meaningful value,
 		// so its remaining checks are skipped — reporting `host must start with
 		// http://` on top of the unset-variable error would just be noise.
@@ -330,10 +342,12 @@ func (c *Config) validate(report placeholderReport) error {
 			errs = append(errs, fmt.Sprintf("system %q: must have both user and password, or neither (for OAuth2)", name))
 		}
 		if !report.unusable(name, "language") && sys.Language != "" {
+			// Report the normalized value, matching Python, whose BeforeValidator has
+			// already uppercased the field by the time it reaches validation.
 			lang := strings.ToUpper(sys.Language)
 			if lang != "DE" && lang != "EN" {
 				errs = append(errs, fmt.Sprintf("system %q: language must be \"DE\" or \"EN\", got %s",
-					name, report.describe(name, "language", sys.Language)))
+					name, report.describe(name, "language", lang)))
 			}
 		}
 	}
@@ -341,6 +355,17 @@ func (c *Config) validate(report placeholderReport) error {
 		return fmt.Errorf("invalid configuration:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
+}
+
+// sortedSystemNames returns the system names in a stable order, so error
+// messages do not shuffle between runs.
+func sortedSystemNames(systems map[string]SAPSystem) []string {
+	names := make([]string, 0, len(systems))
+	for name := range systems {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func isDigits(s string) bool {

@@ -171,6 +171,20 @@ class TestParseValidation:
             )
 
 
+class TestStandaloneSAPSystem:
+    """SAPSystem is exported and documented as subclassable, so it must validate itself."""
+
+    def test_bad_language_rejected(self) -> None:
+        with pytest.raises(ValidationError, match='language must be "DE" or "EN"'):
+            SAPSystem(host="https://x", language="fr")
+
+    def test_good_language_accepted(self) -> None:
+        assert SAPSystem(host="https://x", language="de").language == "DE"
+
+    def test_default_language_accepted(self) -> None:
+        assert SAPSystem(host="https://x").language == "EN"
+
+
 class TestLoadYAMLFixture:
     """Parse the shared testdata/systems.yaml — same assertions as JSON tests."""
 
@@ -438,6 +452,57 @@ class TestEnvPlaceholders:
         assert "SECRET123" not in message
         assert "TOPSECRET" not in message
         assert "the value taken from the environment" in message
+
+    def test_resolved_secret_never_reaches_the_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The whole point of the feature is that the secret is not in the file — nor in the error."""
+        monkeypatch.setenv("SAP_MCP_TEST_PW_LEAK", "hunter2-env-secret")
+        data = (
+            '{"default_system":"dev","systems":{"dev":{"host":"https://x","client":"12345",'
+            '"user":"U","password":"${env:SAP_MCP_TEST_PW_LEAK}"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        assert "hunter2-env-secret" not in str(exc_info.value)
+        # pydantic echoes the validator's input by default; it must be withheld.
+        assert exc_info.value.errors()[0]["input"] is None
+
+    def test_env_derived_default_system_is_not_echoed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SAP_MCP_TEST_DEF_NAME", "secret-system-name")
+        data = (
+            '{"default_system":"${env:SAP_MCP_TEST_DEF_NAME}","systems":{"dev":'
+            '{"host":"https://x","client":"100","user":"u","password":"p"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert "secret-system-name" not in message
+        assert "the value taken from the environment" in message
+
+    def test_system_named_empty_string_is_still_prefixed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A system literally named "" must not look like a top-level field error."""
+        monkeypatch.delenv("SAP_MCP_TEST_EMPTY_NAME", raising=False)
+        data = (
+            '{"default_system":"dev","systems":{"":{"host":"${env:SAP_MCP_TEST_EMPTY_NAME}"},'
+            '"dev":{"host":"https://x","client":"100","user":"u","password":"p"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert 'system "": host references ${env:SAP_MCP_TEST_EMPTY_NAME}' in message
+
+    def test_dotenv_supplies_placeholders(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A .env in the working directory feeds placeholders, as Go's godotenv does."""
+        (tmp_path / ".env").write_text("SAP_MCP_TEST_DOTENV_PW=from-dotenv\n", encoding="utf-8")
+        (tmp_path / "systems.json").write_text(
+            '{"default_system":"a","systems":{"a":{"host":"https://h","client":"100",'
+            '"user":"u","password":"${env:SAP_MCP_TEST_DOTENV_PW}"}}}',
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("SAP_MCP_TEST_DOTENV_PW", raising=False)
+        monkeypatch.setenv("SAP_CONFIG_FILE", str(tmp_path / "systems.json"))
+        monkeypatch.chdir(tmp_path)
+        cfg = load_default()
+        assert cfg.systems["a"].password.get_secret_value() == "from-dotenv"
 
     def test_literal_values_are_still_echoed(self) -> None:
         """A value written in the file is not a secret we hid from the user — keep echoing it."""
