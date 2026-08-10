@@ -295,6 +295,27 @@ func TestPasswordAccessible(t *testing.T) {
 	assert.Equal(t, "dev_secret", cfg.Systems["dev"].Password)
 }
 
+// TestParseRejectsTrailingData guards the behaviour json.Unmarshal gave us for
+// free before Parse decoded by hand. Decoder.More() alone would let the two
+// closing-bracket cases through.
+func TestParseRejectsTrailingData(t *testing.T) {
+	const valid = `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}`
+
+	for _, trailing := range []string{" true", "}", "]", ", {}", "garbage", `{"b":2}`} {
+		t.Run(trailing, func(t *testing.T) {
+			_, err := sapmcpconfig.Parse([]byte(valid + trailing))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unexpected data after top-level value")
+		})
+	}
+
+	t.Run("trailing whitespace is fine", func(t *testing.T) {
+		cfg, err := sapmcpconfig.Parse([]byte(valid + "\n  \n"))
+		require.NoError(t, err)
+		assert.Len(t, cfg.Systems, 1)
+	})
+}
+
 // envFixtureVars is the environment for testdata/env_placeholders.* — kept
 // identical in unittests/test_models.py.
 var envFixtureVars = map[string]string{

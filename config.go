@@ -9,7 +9,9 @@ package sapmcpconfig
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -214,7 +216,11 @@ func Parse(data []byte) (*Config, error) {
 	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("parsing config (expected JSON): %w", err)
 	}
-	if dec.More() {
+	// json.Unmarshal rejects trailing data, and decoding by hand must keep doing
+	// so. Decoder.More() is not enough: it stops at a closing bracket, so it
+	// reports false for inputs like `{...}}` and `{...}]`. Requiring the next
+	// decode to hit EOF covers every case, including those.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parsing config (expected JSON): unexpected data after top-level value")
 	}
 	resolved, err := json.Marshal(interpolateEnv(doc))
