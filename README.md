@@ -320,18 +320,17 @@ class MySAPSystem(SAPSystem):
 #### Development
 
 ```bash
-pip install -e ".[tests]"
-PYTHONPATH=src pytest unittests
+uv sync --group dev
+uv run pytest unittests
 ```
 
-Or via tox:
+Or run individual checks:
 
 ```bash
-pip install tox
-tox -e tests       # unit tests
-tox -e linting     # pylint
-tox -e type_check  # mypy --strict
-tox -e coverage    # coverage with 80% minimum
+uv run --group tests pytest unittests             # unit tests
+uv run --group linting ruff check src/sap_mcp_config  # ruff
+uv run --group type_check mypy --strict src/sap_mcp_config  # mypy --strict
+uv run --group coverage coverage run -m pytest unittests    # coverage
 ```
 
 ### Go

@@ -9,17 +9,26 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.14"
-      - name: Install tox
+      - name: Install dependencies
+        run: uv sync --group tests --group linting --group coverage --group type_check
+      - name: Run tests
+        run: uv run pytest unittests
+      - name: Run linting
         run: |
-          python -m pip install --upgrade pip
-          pip install tox
-      - name: Run tox
-        run: tox
+          uv run ruff check src/sap_mcp_config unittests
+      - name: Run type_check
+        run: |
+          uv run mypy --show-error-codes src/sap_mcp_config --strict
+          uv run mypy --show-error-codes unittests --strict
+      - name: Run coverage
+        run: |
+          uv run coverage run -m pytest unittests
+          uv run coverage report --fail-under 80 --omit 'unittests/*,.venv/*'
 
   build-n-publish:
     name: Build and publish Python distributions to PyPI
@@ -29,17 +38,13 @@ jobs:
       id-token: write
     needs: tests
     steps:
-      - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.14"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install .[packaging]
       - name: Build wheel and source distributions
-        run: python -m build
+        run: uv build
       - name: Publish distribution to PyPI
         if: startsWith(github.ref, 'refs/tags/v')
         uses: pypa/gh-action-pypi-publish@release/v1

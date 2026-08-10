@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Hochfrequenz Unternehmensberatung GmbH", email = "info+github@hochfrequenz.de" }]
 keywords = ["sap", "mcp", "configuration"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -24,50 +24,53 @@ dependencies = [
 ]
 dynamic = ["readme", "version"]
 
-[project.optional-dependencies]
-tests = [
-    "pytest==9.0.3",
-]
-linting = [
-    "pylint==4.0.5",
-]
-type_check = [
-    "mypy==2.1.0",
-    "types-PyYAML>=6",
-]
-spell_check = [
-    "codespell==2.4.2",
-]
-coverage = [
-    "coverage==7.14.0",
-]
-formatting = [
-    "black==26.5.1",
-    "isort==8.0.1",
-]
-packaging = [
-    "build==1.5.0",
-    "twine==6.2.0",
-]
-
 [project.urls]
 Changelog = "https://github.com/Hochfrequenz/sap-mcp-config/releases"
 Homepage = "https://github.com/Hochfrequenz/sap-mcp-config"
 
-[tool.black]
+[tool.ruff]
 line-length = 120
-target_version = ["py311", "py312", "py313", "py314"]
+target-version = "py311"
+extend-exclude = ["*.md"]
 
-[tool.isort]
-line_length = 120
-profile = "black"
-
-[tool.pylint."MESSAGES CONTROL"]
-max-line-length = 120
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "N", "PL", "RUF"]
+ignore = ["PLR0913", "PLR0917", "PLR0912", "PLR0915", "PLR2004"]
 
 [tool.mypy]
 disable_error_code = []
 plugins = ["pydantic.mypy"]
+
+[dependency-groups]
+tests = [
+    "pytest==9.1.1",
+]
+linting = [
+    "ruff==0.16.1",
+    {include-group = "tests"},
+]
+type_check = [
+    "mypy==2.3.0",
+    "types-PyYAML>=6",
+    {include-group = "tests"},
+]
+spell_check = [
+    "codespell==2.4.3",
+]
+coverage = [
+    "coverage==7.15.2",
+    {include-group = "tests"},
+]
+dev = [
+    {include-group = "tests"},
+    {include-group = "linting"},
+    {include-group = "type_check"},
+    {include-group = "spell_check"},
+    {include-group = "coverage"},
+]
+
+[tool.uv]
+default-groups = []
 
 [build-system]
 requires = ["hatchling>=1.8.0", "hatch-vcs", "hatch-fancy-pypi-readme"]
