@@ -47,8 +47,10 @@ type fieldStatus struct {
 }
 
 // topLevelKey identifies fields that belong to the config itself rather than to
-// a system. It contains a NUL so it can never collide with a real system name —
-// including a system literally named "", whose errors must still be prefixed.
+// a system. The NUL makes a collision vanishingly unlikely rather than
+// impossible — a system literally named "\x00config" would still match — but it
+// does keep a system named "" from being mistaken for a top-level field, which
+// was the case that actually occurred.
 const topLevelKey = "\x00config"
 
 // placeholderReport is the outcome of interpolating one config: the errors to

@@ -50,19 +50,52 @@ _REPORT_CONTEXT_KEY = "sap_mcp_config.placeholder_report"
 
 
 def _quote(value: str) -> str:
-    """Quote *value* for an error message, escaping as Go's ``%q`` verb does.
+    """Quote *value* for an error message so its contents cannot break it apart.
 
-    A bare ``f'"{value}"'`` would let a quote or newline inside the value break
-    the message apart — and would disagree with the Go implementation, whose
-    messages the shared fixtures require to match.  ``ensure_ascii=False`` keeps
-    non-ASCII characters literal, which is what ``%q`` does too.
+    A bare ``f'"{value}"'`` lets a quote or newline inside the value split the
+    message across lines or make it ambiguous.
+
+    The exact escaping differs in detail from Go's ``%q`` — control characters
+    and non-ASCII are rendered as ``\\uXXXX`` here.  Matching Go byte for byte
+    was tried and abandoned: it needs Go's printability rules reimplemented, and
+    the cross-language guarantee this package actually makes is about behaviour,
+    not about message wording.  ASCII escaping also keeps a lone surrogate from
+    reaching pydantic, which cannot encode one and would raise
+    ``UnicodeEncodeError`` instead of a ``ValidationError``.
     """
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(value)
+
+
+def _scrub_input(exc: ValidationError) -> ValidationError:
+    """Rebuild *exc* without the input pydantic echoes back.
+
+    Interpolation resolves placeholders before validation runs, so the document
+    handed to the validator holds real credentials — exactly the ones the config
+    file was written to keep out.  pydantic attaches that input to every error,
+    putting them into ``str(exc)`` and ``exc.errors()[...]["input"]``.
+
+    The original error ``type`` is preserved so callers branching on it still
+    work; only ``ctx`` and ``url`` change, since the message is re-templated.
+    """
+    details: list[InitErrorDetails] = [
+        InitErrorDetails(
+            # The message is passed as context rather than inlined into the
+            # template, so a ``${env:VAR}`` inside it is not mistaken for a
+            # placeholder of pydantic's own.
+            type=PydanticCustomError(error["type"], "{message}", {"message": error["msg"]}),
+            loc=error["loc"],
+            input=None,
+        )
+        for error in exc.errors()
+    ]
+    return ValidationError.from_exception_data(exc.title, details)
 
 
 #: Identifies fields belonging to the config itself rather than to a system.
-#: Contains a NUL so it can never collide with a real system name — including a
-#: system literally named ``""``, whose errors must still carry a prefix.
+#: The NUL makes a collision vanishingly unlikely rather than impossible — a
+#: system literally named ``"\x00config"`` would still match — but it does keep
+#: a system named ``""`` from being mistaken for a top-level field, which was
+#: the case that actually occurred.
 _TOP_LEVEL_KEY = "\x00config"
 
 
@@ -169,14 +202,24 @@ def _interpolate(raw: dict[str, Any]) -> _PlaceholderReport:
     if isinstance(default_system, str):
         raw["default_system"] = report.resolve(_TOP_LEVEL_KEY, "default_system", default_system)
     systems = raw.get("systems")
-    if isinstance(systems, dict):
-        for name, system in systems.items():
-            if not isinstance(name, str) or not isinstance(system, dict):
-                continue  # malformed; let pydantic report it
-            for field in _INTERPOLATED_FIELDS:
-                value = system.get(field)
-                if isinstance(value, str):
-                    system[field] = report.resolve(name, field, value)
+    if not isinstance(systems, dict):
+        return report
+    resolved: dict[Any, Any] = {}
+    for name, system in systems.items():
+        if not isinstance(name, str) or not isinstance(system, dict):
+            resolved[name] = system  # malformed; let pydantic report it
+            continue
+        # Copy before resolving. A YAML alias (``b: *s``) hands back the *same*
+        # dict object for two systems, so resolving in place would let the second
+        # system see an already-substituted literal — recording no status for it,
+        # and thus echoing the secret back in any error about that field.
+        updated = dict(system)
+        for field in _INTERPOLATED_FIELDS:
+            value = updated.get(field)
+            if isinstance(value, str):
+                updated[field] = report.resolve(name, field, value)
+        resolved[name] = updated
+    raw["systems"] = resolved
     return report
 
 
@@ -210,22 +253,12 @@ class SAPSystem(BaseModel):
         """True when the system is configured for OAuth2 (no user/password)."""
         return self.user == "" and self.password.get_secret_value() == ""
 
-    @model_validator(mode="after")
-    def _validate_language(self, info: ValidationInfo) -> "SAPSystem":
-        """Reject an unknown language when this system is built on its own.
-
-        While loading a whole config the check is left to
-        :meth:`Config._validate`, which collects it together with every other
-        problem.  Failing here instead would stop that model validator from
-        running at all, so a single bad language would hide the rest of the
-        report — and disagree with Go, which lists them all.
-        """
-        context = info.context if isinstance(info.context, dict) else {}
-        if _REPORT_CONTEXT_KEY in context:
-            return self
-        if self.language not in ("DE", "EN"):
-            raise ValueError(f'language must be "DE" or "EN", got "{self.language}"')
-        return self
+    # ``language`` is deliberately *not* validated here, only normalized by its
+    # BeforeValidator. :meth:`Config._validate` checks the allowed values
+    # instead, so a bad language is collected alongside every other problem. A
+    # field-level failure would abort the model validator, and a single bad
+    # language would then hide the rest of the report — worse than a permissive
+    # standalone ``SAPSystem``, and a disagreement with Go, which lists them all.
 
 
 class Config(BaseModel):
@@ -291,31 +324,25 @@ class Config(BaseModel):
         """Return the default system's configuration."""
         return self.systems[self.default_system]
 
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> "Config":
+        """Validate *obj*, withholding the input from any resulting error.
 
-def _validate_resolved(raw: dict[str, Any], report: _PlaceholderReport) -> Config:
-    """Validate an interpolated document without echoing it back on failure.
+        Wrapping this classmethod covers every documented entry point —
+        :func:`load`, :func:`parse`, :func:`parse_yaml` and direct calls — since
+        ``Config`` is exported and documented as extensible.
 
-    ``raw`` has had its placeholders resolved, so it now holds real credentials
-    that were deliberately kept out of the config file.  pydantic attaches the
-    validator's input to every error it raises, which would put those secrets
-    straight into ``str(exc)`` and ``exc.errors()[...]["input"]``.  The error is
-    therefore rebuilt with the same messages and no input.
-    """
-    try:
-        return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
-    except ValidationError as exc:
-        details: list[InitErrorDetails] = [
-            InitErrorDetails(
-                # The message is passed as context rather than inlined into the
-                # template, so that a ``${env:VAR}`` inside it is not mistaken
-                # for a placeholder of pydantic's own.
-                type=PydanticCustomError("value_error", "{message}", {"message": error["msg"]}),
-                loc=error["loc"],
-                input=None,
-            )
-            for error in exc.errors()
-        ]
-        raise ValidationError.from_exception_data(exc.title, details) from None
+        ``__init__`` is deliberately *not* wrapped as well: defining one on a
+        pydantic model makes ``model_validate`` route through it and validate
+        twice, and the first pass carries no validation context, so the
+        placeholder report would be missing when the validator first runs.
+        A caller using ``Config(**data)`` therefore still gets pydantic's raw
+        input in the error; use :func:`parse` or this method to avoid that.
+        """
+        try:
+            return super().model_validate(obj, **kwargs)
+        except ValidationError as exc:
+            raise _scrub_input(exc) from None
 
 
 def parse(data: str | bytes) -> Config:
@@ -328,7 +355,7 @@ def parse(data: str | bytes) -> Config:
     if not isinstance(raw, dict):
         raise ValueError("expected a JSON object at the top level")
     report = _interpolate(raw)
-    return _validate_resolved(raw, report)
+    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
 
 
 def parse_yaml(data: str | bytes) -> Config:
@@ -341,7 +368,7 @@ def parse_yaml(data: str | bytes) -> Config:
     if not isinstance(raw, dict):
         raise ValueError("expected a YAML mapping at the top level")
     report = _interpolate(raw)
-    return _validate_resolved(raw, report)
+    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
 
 
 _YAML_EXTENSIONS = {".yaml", ".yml"}

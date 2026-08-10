@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sap_mcp_config import SAPSystem, load, load_default, parse, parse_yaml
+from sap_mcp_config import Config, SAPSystem, load, load_default, parse, parse_yaml
 
 TESTDATA = Path(__file__).resolve().parent.parent / "testdata" / "systems.json"
 TESTDATA_YAML = Path(__file__).resolve().parent.parent / "testdata" / "systems.yaml"
@@ -172,17 +172,30 @@ class TestParseValidation:
 
 
 class TestStandaloneSAPSystem:
-    """SAPSystem is exported and documented as subclassable, so it must validate itself."""
+    """A standalone SAPSystem normalizes its language but leaves the check to Config."""
 
-    def test_bad_language_rejected(self) -> None:
-        with pytest.raises(ValidationError, match='language must be "DE" or "EN"'):
-            SAPSystem(host="https://x", language="fr")
-
-    def test_good_language_accepted(self) -> None:
+    def test_language_normalized(self) -> None:
         assert SAPSystem(host="https://x", language="de").language == "DE"
 
-    def test_default_language_accepted(self) -> None:
+    def test_default_language_applied(self) -> None:
         assert SAPSystem(host="https://x").language == "EN"
+
+    def test_unknown_language_deferred_to_config(self) -> None:
+        """Validating here would abort Config's model validator and hide every other error."""
+        assert SAPSystem(host="https://x", language="fr").language == "FR"
+        with pytest.raises(ValidationError, match='language must be "DE" or "EN"'):
+            parse('{"default_system":"a","systems":{"a":{"host":"https://h","language":"fr"}}}')
+
+    def test_config_collects_language_with_other_errors(self) -> None:
+        """The reason the check lives on Config: one bad language must not hide the rest."""
+        with pytest.raises(ValidationError) as exc_info:
+            Config.model_validate(
+                {"default_system": "x", "systems": {"x": {"host": "bad", "client": "1", "language": "fr"}}}
+            )
+        message = exc_info.value.errors()[0]["msg"]
+        assert "host must start with http" in message
+        assert "client must be a 3-digit string" in message
+        assert 'language must be "DE" or "EN"' in message
 
 
 class TestLoadYAMLFixture:
@@ -516,6 +529,41 @@ class TestEnvPlaceholders:
             parse(data)
         # Byte-identical to the Go assertion in TestErrorQuotingEscapesSpecialCharacters.
         assert r'got "ftp://ho\"st\nline"' in exc_info.value.errors()[0]["msg"]
+
+    def test_yaml_alias_does_not_leak_the_resolved_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two systems aliasing one mapping share a dict; resolving in place leaked the secret."""
+        monkeypatch.setenv("SAP_MCP_TEST_ALIAS_PW", "hunter2")
+        data = (
+            "default_system: a\nsystems:\n  a: &s\n    host: bad\n    client: ${env:SAP_MCP_TEST_ALIAS_PW}\n  b: *s\n"
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse_yaml(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert "hunter2" not in message
+        assert message.count("the value taken from the environment") == 2
+
+    def test_lone_surrogate_raises_validation_error(self) -> None:
+        """A lone surrogate must not turn into UnicodeEncodeError from deep inside pydantic."""
+        with pytest.raises(ValidationError):
+            parse('{"default_system":"x","systems":{"x":{"host":"a\\ud800b"}}}')
+
+    def test_public_model_validate_also_withholds_input(self) -> None:
+        """Config is exported and extensible, so the direct entry point is protected too."""
+        with pytest.raises(ValidationError) as exc_info:
+            Config.model_validate(
+                {
+                    "default_system": "x",
+                    "systems": {"x": {"host": "bad", "client": "100", "user": "u", "password": "hunter2"}},
+                }
+            )
+        assert "hunter2" not in str(exc_info.value)
+        assert exc_info.value.errors()[0]["input"] is None
+
+    def test_scrubbed_error_keeps_its_type(self) -> None:
+        """Rebuilding the error must not flatten every type to value_error."""
+        with pytest.raises(ValidationError) as exc_info:
+            parse('{"systems":{"x":{"host":"https://h"}}}')
+        assert exc_info.value.errors()[0]["type"] == "missing"
 
     def test_literal_values_are_still_echoed(self) -> None:
         """A value written in the file is not a secret we hid from the user — keep echoing it."""
