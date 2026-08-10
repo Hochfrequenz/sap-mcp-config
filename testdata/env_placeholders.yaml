@@ -1,0 +1,15 @@
+default_system: interpolated
+systems:
+  interpolated:
+    connection_name: "literal ${env:not an identifier} stays"
+    host: "https://${env:SAP_MCP_TEST_HOSTNAME}:${env:SAP_MCP_TEST_PORT}"
+    client: "${env:SAP_MCP_TEST_CLIENT}"
+    user: "${env:SAP_MCP_TEST_USER}"
+    password: "${env:SAP_MCP_TEST_PASSWORD}"
+    language: DE
+  plain:
+    connection_name: "No Placeholders"
+    host: "https://plain-sap.example.com:44300"
+    client: "200"
+    user: PLAIN_USER
+    password: plain_secret

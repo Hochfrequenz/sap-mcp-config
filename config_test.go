@@ -295,6 +295,131 @@ func TestPasswordAccessible(t *testing.T) {
 	assert.Equal(t, "dev_secret", cfg.Systems["dev"].Password)
 }
 
+// envFixtureVars is the environment for testdata/env_placeholders.* — kept
+// identical in unittests/test_models.py.
+var envFixtureVars = map[string]string{
+	"SAP_MCP_TEST_HOSTNAME": "sap.example.com",
+	"SAP_MCP_TEST_PORT":     "44300",
+	"SAP_MCP_TEST_CLIENT":   "100",
+	"SAP_MCP_TEST_USER":     "FIXTURE_USER",
+	"SAP_MCP_TEST_PASSWORD": "fixture_secret",
+}
+
+// setEnvFixture sets the variables that testdata/env_placeholders.* refers to.
+func setEnvFixture(t *testing.T) {
+	t.Helper()
+	for key, value := range envFixtureVars {
+		t.Setenv(key, value)
+	}
+}
+
+// unsetEnvFixture removes them again. t.Setenv is called first so the original
+// value is restored when the test finishes.
+func unsetEnvFixture(t *testing.T) {
+	t.Helper()
+	for key := range envFixtureVars {
+		t.Setenv(key, "")
+		require.NoError(t, os.Unsetenv(key))
+	}
+}
+
+func TestEnvPlaceholdersResolved(t *testing.T) {
+	setEnvFixture(t)
+	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	require.NoError(t, err)
+
+	sys := cfg.Systems["interpolated"]
+	// A placeholder may be the whole value...
+	assert.Equal(t, "FIXTURE_USER", sys.User)
+	assert.Equal(t, "fixture_secret", sys.Password)
+	assert.Equal(t, "100", sys.Client)
+	// ...or embedded, several times, inside a larger string.
+	assert.Equal(t, "https://sap.example.com:44300", sys.Host)
+	assert.Equal(t, "DE", sys.Language)
+}
+
+func TestEnvPlaceholderNonIdentifierIsLiteral(t *testing.T) {
+	setEnvFixture(t)
+	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	require.NoError(t, err)
+	// ${env:not an identifier} does not match the grammar, so it stays as typed.
+	assert.Equal(t, "literal ${env:not an identifier} stays", cfg.Systems["interpolated"].ConnectionName)
+}
+
+func TestEnvPlaceholdersLeaveOtherSystemsUntouched(t *testing.T) {
+	setEnvFixture(t)
+	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	require.NoError(t, err)
+
+	plain := cfg.Systems["plain"]
+	assert.Equal(t, "https://plain-sap.example.com:44300", plain.Host)
+	assert.Equal(t, "PLAIN_USER", plain.User)
+	assert.Equal(t, "plain_secret", plain.Password)
+}
+
+func TestEnvPlaceholdersYAMLMatchesJSON(t *testing.T) {
+	setEnvFixture(t)
+	jsonCfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	require.NoError(t, err)
+	yamlCfg, err := sapmcpconfig.Load("testdata/env_placeholders.yaml")
+	require.NoError(t, err)
+
+	for name, jsonSys := range jsonCfg.Systems {
+		yamlSys, ok := yamlCfg.Systems[name]
+		require.True(t, ok, "system %q missing from YAML config", name)
+		assert.Equal(t, jsonSys, yamlSys, "system %q differs between JSON and YAML", name)
+	}
+}
+
+func TestEnvPlaceholderUnsetIsError(t *testing.T) {
+	unsetEnvFixture(t)
+	_, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "references ${env:SAP_MCP_TEST_HOSTNAME}, which is not set in the environment")
+}
+
+func TestEnvPlaceholderUnsetDoesNotBecomeOAuth2(t *testing.T) {
+	// A forgotten export must fail loudly, not silently switch the system to OAuth2.
+	unsetEnvFixture(t)
+	_, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "user references ${env:SAP_MCP_TEST_USER}")
+	assert.Contains(t, msg, "password references ${env:SAP_MCP_TEST_PASSWORD}")
+	// The both-or-neither rule must not fire on unresolved values.
+	assert.NotContains(t, msg, "must have both user and password")
+}
+
+func TestEnvPlaceholderUnsetCollectedWithOtherErrors(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_PW", "")
+	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_PW"))
+	data := `{"default_system":"a","systems":{"a":{"host":"ftp://wrong","client":"100","user":"u","password":"${env:SAP_MCP_TEST_PW}"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "password references ${env:SAP_MCP_TEST_PW}, which is not set")
+	assert.Contains(t, msg, "host must start with http")
+}
+
+func TestEnvSubstitutionIsSinglePass(t *testing.T) {
+	// A resolved value containing ${env:...} is not rescanned — no indirect reads.
+	t.Setenv("SAP_MCP_TEST_SECRET", "the-real-secret")
+	t.Setenv("SAP_MCP_TEST_INDIRECT", "${env:SAP_MCP_TEST_SECRET}")
+	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_INDIRECT}"}}}`
+	cfg, err := sapmcpconfig.Parse([]byte(data))
+	require.NoError(t, err)
+	assert.Equal(t, "${env:SAP_MCP_TEST_SECRET}", cfg.Systems["a"].Password)
+}
+
+func TestEnvPlaceholderInDefaultSystem(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_DEFAULT", "")
+	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_DEFAULT"))
+	data := `{"default_system":"${env:SAP_MCP_TEST_DEFAULT}","systems":{"a":{"host":"https://h","client":"100","user":"u","password":"p"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default_system references ${env:SAP_MCP_TEST_DEFAULT}")
+}
+
 func TestLoadDefaultFileNotFound(t *testing.T) {
 	t.Setenv("SAP_CONFIG_FILE", "/nonexistent/path/systems.json")
 	_, err := sapmcpconfig.LoadDefault()
