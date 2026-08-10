@@ -1,6 +1,7 @@
 package sapmcpconfig_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -389,6 +390,32 @@ func TestEnvPlaceholdersYAMLMatchesJSON(t *testing.T) {
 		yamlSys, ok := yamlCfg.Systems[name]
 		require.True(t, ok, "system %q missing from YAML config", name)
 		assert.Equal(t, jsonSys, yamlSys, "system %q differs between JSON and YAML", name)
+	}
+}
+
+// TestEnvPlaceholderNearMissesKeptVerbatim pins the README table: text that only
+// looks like a placeholder is used as-is rather than replaced or rejected.
+func TestEnvPlaceholderNearMissesKeptVerbatim(t *testing.T) {
+	t.Setenv("SAP_PASSWORD", "should-not-be-used")
+
+	for _, literal := range []string{
+		"${env:not an identifier}", // spaces are not allowed in a name
+		"${env:2FA_TOKEN}",         // a name cannot start with a digit
+		"${SAP_PASSWORD}",          // missing the env: prefix
+		"$env:SAP_PASSWORD",        // missing the braces
+	} {
+		t.Run(literal, func(t *testing.T) {
+			data, err := json.Marshal(map[string]any{
+				"default_system": "a",
+				"systems": map[string]any{
+					"a": map[string]any{"host": "https://h", "client": "100", "user": "u", "password": literal},
+				},
+			})
+			require.NoError(t, err)
+			cfg, err := sapmcpconfig.Parse(data)
+			require.NoError(t, err)
+			assert.Equal(t, literal, cfg.Systems["a"].Password)
+		})
 	}
 }
 

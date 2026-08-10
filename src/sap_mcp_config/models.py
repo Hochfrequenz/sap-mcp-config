@@ -4,7 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal, TypeVar, cast
 
 import yaml
 from dotenv import load_dotenv
@@ -19,7 +19,13 @@ Language = Annotated[Literal["DE", "EN"], BeforeValidator(lambda v: v.upper() if
 #: Matches an ``${env:VAR}`` placeholder.  ``VAR`` must be a plain identifier,
 #: so anything else — e.g. ``${env:not an identifier}`` — stays a literal and
 #: can never be mistaken for a placeholder.
-_ENV_PLACEHOLDER = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+#:
+#: Deliberately **not** anchored with ``^``/``$``: a placeholder may sit anywhere
+#: inside a larger value, and a value may hold several — ``"https://${env:HOST}:
+#: ${env:PORT}"`` must resolve both.  Anchoring would restrict placeholders to
+#: whole-value use only and silently break that.  The identifier character class
+#: is what keeps matches tight, not the position.
+_ENV_PLACEHOLDER = re.compile(r"\$\{env:(?P<var>[A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: Fields whose value may carry an ``${env:VAR}`` placeholder.  ``language`` is
 #: deliberately absent: it is a ``Literal`` and pydantic already rejects an
@@ -28,7 +34,13 @@ _ENV_PLACEHOLDER = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 _INTERPOLATED_FIELDS = ("connection_name", "host", "client", "user", "password", "oauth2_client_id")
 
 
-def _interpolate_env(value: Any) -> Any:
+#: A node of a parsed JSON/YAML document.  Interpolation never changes a node's
+#: type — a ``str`` yields a ``str``, a ``dict`` a ``dict`` — so callers keep the
+#: static type they passed in.
+_DocumentNode = TypeVar("_DocumentNode")
+
+
+def _interpolate_env(value: _DocumentNode) -> _DocumentNode:
     """Replace ``${env:VAR}`` with the environment value in every string of a parsed document.
 
     Substitution is **single-pass**: replacement text is never rescanned, so a
@@ -40,11 +52,12 @@ def _interpolate_env(value: Any) -> Any:
     rather than silently yielding an empty string.
     """
     if isinstance(value, str):
-        return _ENV_PLACEHOLDER.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
+        resolved = _ENV_PLACEHOLDER.sub(lambda m: os.environ.get(m.group("var"), m.group(0)), value)
+        return cast("_DocumentNode", resolved)
     if isinstance(value, dict):
-        return {key: _interpolate_env(item) for key, item in value.items()}
+        return cast("_DocumentNode", {key: _interpolate_env(item) for key, item in value.items()})
     if isinstance(value, list):
-        return [_interpolate_env(item) for item in value]
+        return cast("_DocumentNode", [_interpolate_env(item) for item in value])
     return value
 
 
@@ -57,29 +70,47 @@ def _unresolved_env_var(value: str) -> str | None:
     a literal the user meant to keep, not a mistake.
     """
     for match in _ENV_PLACEHOLDER.finditer(value):
-        if match.group(1) not in os.environ:
-            return match.group(1)
+        if match.group("var") not in os.environ:
+            return match.group("var")
     return None
 
 
-def _collect_unresolved(name: str, system: "SAPSystem") -> tuple[list[str], set[str]]:
-    """Report every field of *system* still holding a placeholder.
+class _UnresolvedPlaceholders(BaseModel):
+    """The fields of one system whose ``${env:VAR}`` placeholder could not be resolved.
 
-    Returns the error messages and the names of the affected fields, so the
-    caller can skip their remaining checks.  Only the variable *name* is
-    reported — never the value it resolved to — so a validation failure can't
-    echo a credential.
+    Produced by :func:`_collect_unresolved` and consumed by
+    :meth:`Config._validate`, which reports :attr:`messages` and uses
+    :meth:`covers` to skip the remaining checks on an affected field.
     """
-    errs: list[str] = []
-    unresolved: set[str] = set()
+
+    model_config = ConfigDict(frozen=True)
+
+    #: One ready-to-report error per affected field, naming the unset variable.
+    messages: tuple[str, ...] = ()
+    #: Names of the affected fields, e.g. ``{"user", "password"}``.
+    field_names: frozenset[str] = frozenset()
+
+    def covers(self, field: str) -> bool:
+        """True when *field* holds an unresolved placeholder, so its value is not usable yet."""
+        return field in self.field_names
+
+
+def _collect_unresolved(name: str, system: "SAPSystem") -> _UnresolvedPlaceholders:
+    """Find every field of *system* still holding a placeholder.
+
+    Only the variable *name* is reported — never the value it resolved to — so a
+    validation failure can't echo a credential.
+    """
+    messages: list[str] = []
+    field_names: set[str] = set()
     for field in _INTERPOLATED_FIELDS:
         raw = getattr(system, field)
         text = raw.get_secret_value() if isinstance(raw, SecretStr) else raw
         var = _unresolved_env_var(text)
         if var is not None:
-            unresolved.add(field)
-            errs.append(f'system "{name}": {field} references ${{env:{var}}}, which is not set in the environment')
-    return errs, unresolved
+            field_names.add(field)
+            messages.append(f'system "{name}": {field} references ${{env:{var}}}, which is not set in the environment')
+    return _UnresolvedPlaceholders(messages=tuple(messages), field_names=frozenset(field_names))
 
 
 class SAPSystem(BaseModel):
@@ -143,17 +174,17 @@ class Config(BaseModel):
             # would just be noise. Crucially this also suppresses the both-or-
             # neither check, which would otherwise read an unresolved user and
             # password as a deliberate OAuth2 system.
-            unresolved_errs, unresolved = _collect_unresolved(name, sys)
-            errs.extend(unresolved_errs)
-            if "host" not in unresolved:
+            unresolved = _collect_unresolved(name, sys)
+            errs.extend(unresolved.messages)
+            if not unresolved.covers("host"):
                 if not sys.host:
                     errs.append(f'system "{name}": host is required')
                 elif not sys.host.startswith(("http://", "https://")):
                     errs.append(f'system "{name}": host must start with http:// or https://, got "{sys.host}"')
-            if "client" not in unresolved and sys.client and (len(sys.client) != 3 or not sys.client.isdigit()):
+            if not unresolved.covers("client") and sys.client and (len(sys.client) != 3 or not sys.client.isdigit()):
                 errs.append(f'system "{name}": client must be a 3-digit string (e.g. "100"), got "{sys.client}"')
             pwd = sys.password.get_secret_value()
-            if not unresolved & {"user", "password"} and (sys.user == "") != (pwd == ""):
+            if not (unresolved.covers("user") or unresolved.covers("password")) and (sys.user == "") != (pwd == ""):
                 errs.append(f'system "{name}": must have both user and password, or neither (for OAuth2)')
         if errs:
             raise ValueError("invalid configuration:\n  - " + "\n  - ".join(errs))

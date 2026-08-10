@@ -27,7 +27,17 @@ const DefaultConfigPath = "~/.config/sap-mcp/systems.json"
 // envPlaceholder matches an ${env:VAR} placeholder. VAR must be a plain
 // identifier, so anything else — e.g. ${env:not an identifier} — stays a
 // literal and can never be mistaken for a placeholder.
-var envPlaceholder = regexp.MustCompile(`\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)
+//
+// Deliberately not anchored with ^/$: a placeholder may sit anywhere inside a
+// larger value, and a value may hold several — "https://${env:HOST}:${env:PORT}"
+// must resolve both. Anchoring would restrict placeholders to whole-value use
+// only and silently break that. The identifier character class is what keeps
+// matches tight, not the position.
+var envPlaceholder = regexp.MustCompile(`\$\{env:(?P<var>[A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// envPlaceholderVar is the index of envPlaceholder's named "var" group, so
+// matches are read by name rather than by a bare literal index.
+var envPlaceholderVar = envPlaceholder.SubexpIndex("var")
 
 // interpolateEnv replaces ${env:VAR} with the environment value in every string
 // of a decoded document.
@@ -43,7 +53,7 @@ func interpolateEnv(v any) any {
 	switch t := v.(type) {
 	case string:
 		return envPlaceholder.ReplaceAllStringFunc(t, func(match string) string {
-			name := envPlaceholder.FindStringSubmatch(match)[1]
+			name := envPlaceholder.FindStringSubmatch(match)[envPlaceholderVar]
 			if value, ok := os.LookupEnv(name); ok {
 				return value
 			}
@@ -81,8 +91,8 @@ func interpolateEnv(v any) any {
 // user meant to keep, not a mistake.
 func unresolvedEnvVar(value string) (string, bool) {
 	for _, m := range envPlaceholder.FindAllStringSubmatch(value, -1) {
-		if _, ok := os.LookupEnv(m[1]); !ok {
-			return m[1], true
+		if _, ok := os.LookupEnv(m[envPlaceholderVar]); !ok {
+			return m[envPlaceholderVar], true
 		}
 	}
 	return "", false
@@ -268,19 +278,19 @@ func (c *Config) Validate() error {
 		// noise. Crucially this also suppresses the both-or-neither check, which
 		// would otherwise read an unresolved user and password as a deliberate
 		// OAuth2 system.
-		unresolvedErrs, unresolved := collectUnresolved(name, sys)
-		errs = append(errs, unresolvedErrs...)
-		if !unresolved["host"] {
+		unresolved := collectUnresolved(name, sys)
+		errs = append(errs, unresolved.messages...)
+		if !unresolved.covers("host") {
 			if sys.Host == "" {
 				errs = append(errs, fmt.Sprintf("system %q: host is required", name))
 			} else if !strings.HasPrefix(sys.Host, "http://") && !strings.HasPrefix(sys.Host, "https://") {
 				errs = append(errs, fmt.Sprintf("system %q: host must start with http:// or https://, got %q", name, sys.Host))
 			}
 		}
-		if !unresolved["client"] && sys.Client != "" && (len(sys.Client) != 3 || !isDigits(sys.Client)) {
+		if !unresolved.covers("client") && sys.Client != "" && (len(sys.Client) != 3 || !isDigits(sys.Client)) {
 			errs = append(errs, fmt.Sprintf("system %q: client must be a 3-digit string (e.g. \"100\"), got %q", name, sys.Client))
 		}
-		if !unresolved["user"] && !unresolved["password"] && (sys.User == "") != (sys.Password == "") {
+		if !unresolved.covers("user") && !unresolved.covers("password") && (sys.User == "") != (sys.Password == "") {
 			errs = append(errs, fmt.Sprintf("system %q: must have both user and password, or neither (for OAuth2)", name))
 		}
 		if sys.Language != "" {
@@ -296,9 +306,27 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// collectUnresolved appends an error for every field of sys still holding a
-// placeholder, and returns the affected field names so the caller can skip
-// their remaining checks.
+// unresolvedPlaceholders holds the fields of one system whose ${env:VAR}
+// placeholder could not be resolved.
+//
+// Produced by collectUnresolved and consumed by [Config.Validate], which
+// reports messages and uses covers to skip the remaining checks on an
+// affected field.
+type unresolvedPlaceholders struct {
+	// messages holds one ready-to-report error per affected field, naming the
+	// unset variable.
+	messages []string
+	// fieldNames holds the affected field names, e.g. {"user", "password"}.
+	fieldNames map[string]bool
+}
+
+// covers reports whether field holds an unresolved placeholder, so its value is
+// not usable yet.
+func (u unresolvedPlaceholders) covers(field string) bool {
+	return u.fieldNames[field]
+}
+
+// collectUnresolved finds every field of sys still holding a placeholder.
 //
 // Language is deliberately absent: an unresolved placeholder there is already
 // rejected by the existing DE/EN check, and in Python by the Literal field
@@ -306,7 +334,7 @@ func (c *Config) Validate() error {
 //
 // Only the variable name is reported, never the value it resolved to, so a
 // validation failure cannot echo a credential.
-func collectUnresolved(name string, sys SAPSystem) ([]string, map[string]bool) {
+func collectUnresolved(name string, sys SAPSystem) unresolvedPlaceholders {
 	fields := []struct{ field, value string }{
 		{"connection_name", sys.ConnectionName},
 		{"host", sys.Host},
@@ -315,15 +343,15 @@ func collectUnresolved(name string, sys SAPSystem) ([]string, map[string]bool) {
 		{"password", sys.Password},
 		{"oauth2_client_id", sys.OAuth2ClientID},
 	}
-	var errs []string
-	unresolved := make(map[string]bool)
+	result := unresolvedPlaceholders{fieldNames: make(map[string]bool)}
 	for _, f := range fields {
 		if v, ok := unresolvedEnvVar(f.value); ok {
-			unresolved[f.field] = true
-			errs = append(errs, fmt.Sprintf("system %q: %s references ${env:%s}, which is not set in the environment", name, f.field, v))
+			result.fieldNames[f.field] = true
+			result.messages = append(result.messages,
+				fmt.Sprintf("system %q: %s references ${env:%s}, which is not set in the environment", name, f.field, v))
 		}
 	}
-	return errs, unresolved
+	return result
 }
 
 func isDigits(s string) bool {

@@ -165,8 +165,21 @@ export SAP_DEV_PASSWORD=...
 
 **Rules:**
 
-- The variable name must be a plain identifier: letters, digits and underscores, not starting with a digit. Anything else - `${env:not an identifier}` - is left in place as literal text.
+- Only the exact form `${env:NAME}` is a placeholder, where `NAME` is a plain identifier: letters, digits and underscores, not starting with a digit. Anything that does not match that form is left alone as literal text - see the table below.
 - A placeholder can be the whole value or embedded in a larger string, and a string may contain several: `"host": "https://${env:SAP_HOSTNAME}:${env:SAP_PORT}"`.
+
+**What counts as a placeholder:**
+
+| In your config | Result |
+|---|---|
+| `${env:SAP_DEV_PASSWORD}` | Replaced. If the variable is unset, loading **fails with an error** |
+| `https://${env:HOST}:${env:PORT}` | Both replaced |
+| `${env:not an identifier}` | Literal text - spaces are not allowed in a name |
+| `${env:2FA_TOKEN}` | Literal text - a name cannot start with a digit |
+| `${SAP_PASSWORD}` | Literal text - missing the `env:` prefix |
+| `$env:SAP_PASSWORD` | Literal text - missing the braces |
+
+The important half of this table is the bottom: text that *looks* like a placeholder but does not match the exact form is used verbatim, so a near-miss such as `${SAP_PASSWORD}` becomes your literal password rather than an error. A genuine placeholder whose variable is unset always fails loudly, so the two cases can never be confused.
 - **An unset variable is an error**, reported alongside every other validation problem. It never resolves to an empty string - so a forgotten `export` cannot silently turn a user/password system into an OAuth2 one.
 - Substitution runs **once**. A value pulled from the environment is not scanned again, so a secret that happens to contain `${env:...}` is kept as literal text rather than triggering a further lookup.
 - Placeholders work in JSON and YAML alike, and in every string field. `language` is the one exception worth noting - it only accepts `DE` or `EN`, so an unresolved placeholder there is reported as an invalid language.

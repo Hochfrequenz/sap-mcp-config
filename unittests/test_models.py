@@ -1,5 +1,6 @@
 """Tests for sap_mcp_config — must stay consistent with config_test.go."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -356,6 +357,28 @@ class TestEnvPlaceholders:
             assert json_sys.user == yaml_sys.user
             assert json_sys.password.get_secret_value() == yaml_sys.password.get_secret_value()
             assert json_sys.connection_name == yaml_sys.connection_name
+
+    @pytest.mark.parametrize(
+        "literal",
+        [
+            "${env:not an identifier}",  # spaces are not allowed in a name
+            "${env:2FA_TOKEN}",  # a name cannot start with a digit
+            "${SAP_PASSWORD}",  # missing the env: prefix
+            "$env:SAP_PASSWORD",  # missing the braces
+        ],
+    )
+    def test_near_misses_are_kept_verbatim(self, literal: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Text that only looks like a placeholder is used as-is — see the README table."""
+        monkeypatch.setenv("SAP_PASSWORD", "should-not-be-used")
+        monkeypatch.setenv("SAP_MCP_TEST_2FA_TOKEN", "should-not-be-used")
+        data = json.dumps(
+            {
+                "default_system": "a",
+                "systems": {"a": {"host": "https://h", "client": "100", "user": "u", "password": literal}},
+            }
+        )
+        cfg = parse(data)
+        assert cfg.systems["a"].password.get_secret_value() == literal
 
     def test_unset_variable_is_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in ENV_FIXTURE_VARS:
