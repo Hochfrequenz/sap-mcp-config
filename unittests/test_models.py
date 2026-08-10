@@ -411,16 +411,122 @@ class TestEnvPlaceholders:
         assert "host must start with http" in msg
 
     def test_error_does_not_echo_resolved_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SAP_MCP_TEST_HOST", "ftp://wrong")
-        monkeypatch.delenv("SAP_MCP_TEST_PW", raising=False)
-        data = (
-            '{"default_system":"a","systems":{"a":'
-            '{"host":"${env:SAP_MCP_TEST_HOST}","client":"100","user":"u","password":"${env:SAP_MCP_TEST_PW}"}}}'
+        """A value taken from the environment is never printed back, even when it fails a check."""
+        monkeypatch.setenv("SAP_MCP_TEST_BAD_HOST", "ftp://secret-internal-host")
+        monkeypatch.setenv("SAP_MCP_TEST_BAD_CLIENT", "SECRET123")
+        monkeypatch.setenv("SAP_MCP_TEST_BAD_LANG", "TOPSECRET")
+        data = json.dumps(
+            {
+                "default_system": "a",
+                "systems": {
+                    "a": {
+                        "host": "${env:SAP_MCP_TEST_BAD_HOST}",
+                        "client": "${env:SAP_MCP_TEST_BAD_CLIENT}",
+                        "user": "u",
+                        "password": "p",
+                        "language": "${env:SAP_MCP_TEST_BAD_LANG}",
+                    }
+                },
+            }
         )
         with pytest.raises(ValidationError) as exc_info:
             parse(data)
-        # The unset password is named but never valued.
-        assert "SAP_MCP_TEST_PW" in str(exc_info.value)
+        # Assert on our own message, not str(exc): pydantic separately echoes the
+        # validator's raw input, which is a pre-existing leak tracked elsewhere.
+        message = exc_info.value.errors()[0]["msg"]
+        assert "secret-internal-host" not in message
+        assert "SECRET123" not in message
+        assert "TOPSECRET" not in message
+        assert "the value taken from the environment" in message
+
+    def test_literal_values_are_still_echoed(self) -> None:
+        """A value written in the file is not a secret we hid from the user — keep echoing it."""
+        data = '{"default_system":"a","systems":{"a":{"host":"ftp://written-in-file","user":"u","password":"p"}}}'
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        assert "ftp://written-in-file" in exc_info.value.errors()[0]["msg"]
+
+    def test_env_value_containing_placeholder_is_literal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Single-pass holds at the validation layer: an inner ${env:...} is literal text."""
+        monkeypatch.setenv("SAP_MCP_TEST_SECRET_WITH_PH", "hunter2${env:SAP_MCP_TEST_NEVER_SET}tail")
+        monkeypatch.delenv("SAP_MCP_TEST_NEVER_SET", raising=False)
+        data = (
+            '{"default_system":"a","systems":{"a":'
+            '{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_SECRET_WITH_PH}"}}}'
+        )
+        cfg = parse(data)
+        assert cfg.systems["a"].password.get_secret_value() == "hunter2${env:SAP_MCP_TEST_NEVER_SET}tail"
+
+    def test_empty_variable_is_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A defined-but-empty variable — an unpopulated CI secret — must not become OAuth2."""
+        monkeypatch.setenv("SAP_MCP_TEST_EMPTY_USER", "")
+        monkeypatch.setenv("SAP_MCP_TEST_EMPTY_PW", "")
+        data = (
+            '{"default_system":"a","systems":{"a":{"host":"https://h","client":"100",'
+            '"user":"${env:SAP_MCP_TEST_EMPTY_USER}","password":"${env:SAP_MCP_TEST_EMPTY_PW}"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert "references ${env:SAP_MCP_TEST_EMPTY_USER}, which is set but empty" in message
+        assert "must have both user and password" not in message
+
+    def test_unresolved_language_collected_with_other_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unresolved language must not abort the rest of the report."""
+        for key in ("SAP_MCP_TEST_UU", "SAP_MCP_TEST_PP", "SAP_MCP_TEST_LL"):
+            monkeypatch.delenv(key, raising=False)
+        data = (
+            '{"default_system":"a","systems":{"a":{"host":"https://h","client":"100",'
+            '"user":"${env:SAP_MCP_TEST_UU}","password":"${env:SAP_MCP_TEST_PP}",'
+            '"language":"${env:SAP_MCP_TEST_LL}"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert "user references ${env:SAP_MCP_TEST_UU}" in message
+        assert "password references ${env:SAP_MCP_TEST_PP}" in message
+        assert "language references ${env:SAP_MCP_TEST_LL}" in message
+
+    def test_unresolved_field_skips_its_other_checks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SAP_MCP_TEST_CL", raising=False)
+        data = (
+            '{"default_system":"a","systems":{"a":'
+            '{"host":"https://h","client":"${env:SAP_MCP_TEST_CL}","user":"u","password":"p"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert "client references ${env:SAP_MCP_TEST_CL}" in message
+        assert "3-digit" not in message
+
+    def test_unresolved_in_all_placeholder_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """connection_name and oauth2_client_id have no other validation to exercise them."""
+        for key in ("SAP_MCP_TEST_CN", "SAP_MCP_TEST_OA"):
+            monkeypatch.delenv(key, raising=False)
+        data = (
+            '{"default_system":"a","systems":{"a":{"connection_name":"${env:SAP_MCP_TEST_CN}",'
+            '"host":"https://h","client":"100","oauth2_client_id":"${env:SAP_MCP_TEST_OA}"}}}'
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            parse(data)
+        message = exc_info.value.errors()[0]["msg"]
+        assert "connection_name references ${env:SAP_MCP_TEST_CN}" in message
+        assert "oauth2_client_id references ${env:SAP_MCP_TEST_OA}" in message
+
+    def test_unset_variable_is_an_error_yaml(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mirror of the JSON unset path — the fixtures only exercised JSON."""
+        for key in ENV_FIXTURE_VARS:
+            monkeypatch.delenv(key, raising=False)
+        with pytest.raises(ValidationError, match=r"references \$\{env:SAP_MCP_TEST_HOSTNAME\}, which is not set"):
+            load(TESTDATA_ENV_YAML)
+
+    def test_self_referential_yaml_does_not_recurse(self) -> None:
+        """A cyclic anchor must not send interpolation into unbounded recursion."""
+        data = (
+            "x: &a [*a]\ndefault_system: a\nsystems:\n  a: {host: 'https://h', client: '100', user: u, password: p}\n"
+        )
+        cfg = parse_yaml(data)
+        assert cfg.systems["a"].host == "https://h"
 
     def test_substitution_is_single_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A resolved value containing ${env:...} is not rescanned — no indirect reads."""

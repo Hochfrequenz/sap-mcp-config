@@ -296,9 +296,9 @@ func TestPasswordAccessible(t *testing.T) {
 	assert.Equal(t, "dev_secret", cfg.Systems["dev"].Password)
 }
 
-// TestParseRejectsTrailingData guards the behaviour json.Unmarshal gave us for
-// free before Parse decoded by hand. Decoder.More() alone would let the two
-// closing-bracket cases through.
+// TestParseRejectsTrailingData pins that trailing data is rejected. Parse relies
+// on json.Unmarshal for this; the test exists so a future hand-rolled decoder
+// cannot quietly lose the behaviour.
 func TestParseRejectsTrailingData(t *testing.T) {
 	const valid = `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}`
 
@@ -306,7 +306,6 @@ func TestParseRejectsTrailingData(t *testing.T) {
 		t.Run(trailing, func(t *testing.T) {
 			_, err := sapmcpconfig.Parse([]byte(valid + trailing))
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "unexpected data after top-level value")
 		})
 	}
 
@@ -315,6 +314,121 @@ func TestParseRejectsTrailingData(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, cfg.Systems, 1)
 	})
+}
+
+// TestYAMLScalarsSurviveInterpolation guards against interpolation changing a
+// value's text. Decoding YAML into a generic document and re-encoding it
+// re-tags unquoted scalars, so a password of 007 would silently load as 7.
+func TestYAMLScalarsSurviveInterpolation(t *testing.T) {
+	for _, raw := range []string{"007", "0100", "010", "0x1F", "1_000", "+1", "1e3", "1.10", "2001-12-14", "on"} {
+		t.Run(raw, func(t *testing.T) {
+			y := "default_system: a\nsystems:\n  a:\n    host: 'https://h'\n    client: '100'\n    user: u\n    password: " + raw + "\n"
+			cfg, err := sapmcpconfig.ParseYAML([]byte(y))
+			require.NoError(t, err)
+			assert.Equal(t, raw, cfg.Systems["a"].Password, "password text must survive verbatim")
+		})
+	}
+}
+
+// TestEnvValueContainingPlaceholderIsLiteral pins the single-pass guarantee at
+// the validation layer too: a secret whose value contains ${env:...} is literal
+// text, whether or not that inner variable happens to exist.
+func TestEnvValueContainingPlaceholderIsLiteral(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_SECRET_WITH_PH", "hunter2${env:SAP_MCP_TEST_NEVER_SET}tail")
+	t.Setenv("SAP_MCP_TEST_NEVER_SET", "")
+	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_NEVER_SET"))
+
+	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_SECRET_WITH_PH}"}}}`
+	cfg, err := sapmcpconfig.Parse([]byte(data))
+	require.NoError(t, err)
+	assert.Equal(t, "hunter2${env:SAP_MCP_TEST_NEVER_SET}tail", cfg.Systems["a"].Password)
+}
+
+// TestEnvPlaceholderEmptyValueIsError pins that a defined-but-empty variable is
+// rejected. It is the shape an unpopulated CI secret takes, and letting it
+// through would flip a credentialed system to OAuth2.
+func TestEnvPlaceholderEmptyValueIsError(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_EMPTY_USER", "")
+	t.Setenv("SAP_MCP_TEST_EMPTY_PW", "")
+
+	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"${env:SAP_MCP_TEST_EMPTY_USER}","password":"${env:SAP_MCP_TEST_EMPTY_PW}"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "references ${env:SAP_MCP_TEST_EMPTY_USER}, which is set but empty")
+	assert.NotContains(t, err.Error(), "must have both user and password")
+}
+
+// TestEnvErrorsDoNotEchoResolvedValues pins that a value taken from the
+// environment is never printed back, even when it fails a shape check.
+func TestEnvErrorsDoNotEchoResolvedValues(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_BAD_HOST", "ftp://secret-internal-host")
+	t.Setenv("SAP_MCP_TEST_BAD_CLIENT", "SECRET123")
+	t.Setenv("SAP_MCP_TEST_BAD_LANG", "TOPSECRET")
+
+	data := `{"default_system":"a","systems":{"a":{"host":"${env:SAP_MCP_TEST_BAD_HOST}","client":"${env:SAP_MCP_TEST_BAD_CLIENT}","user":"u","password":"p","language":"${env:SAP_MCP_TEST_BAD_LANG}"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.NotContains(t, msg, "secret-internal-host")
+	assert.NotContains(t, msg, "SECRET123")
+	assert.NotContains(t, msg, "TOPSECRET")
+	assert.Contains(t, msg, "the value taken from the environment")
+	// A value written literally in the file is still echoed, as before.
+	literal := `{"default_system":"a","systems":{"a":{"host":"ftp://written-in-file","user":"u","password":"p"}}}`
+	_, err = sapmcpconfig.Parse([]byte(literal))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ftp://written-in-file")
+}
+
+// TestUnresolvedLanguageCollectedWithOtherErrors pins that an unresolved
+// language does not abort the rest of the report.
+func TestUnresolvedLanguageCollectedWithOtherErrors(t *testing.T) {
+	for _, k := range []string{"SAP_MCP_TEST_UU", "SAP_MCP_TEST_PP", "SAP_MCP_TEST_LL"} {
+		t.Setenv(k, "")
+		require.NoError(t, os.Unsetenv(k))
+	}
+	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"${env:SAP_MCP_TEST_UU}","password":"${env:SAP_MCP_TEST_PP}","language":"${env:SAP_MCP_TEST_LL}"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "user references ${env:SAP_MCP_TEST_UU}")
+	assert.Contains(t, msg, "password references ${env:SAP_MCP_TEST_PP}")
+	assert.Contains(t, msg, "language references ${env:SAP_MCP_TEST_LL}")
+}
+
+// TestUnresolvedFieldSkipsItsOtherChecks pins the suppression: an unresolved
+// client must not also produce the 3-digit complaint.
+func TestUnresolvedFieldSkipsItsOtherChecks(t *testing.T) {
+	t.Setenv("SAP_MCP_TEST_CL", "")
+	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_CL"))
+	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"${env:SAP_MCP_TEST_CL}","user":"u","password":"p"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client references ${env:SAP_MCP_TEST_CL}")
+	assert.NotContains(t, err.Error(), "3-digit")
+}
+
+// TestUnresolvedInAllPlaceholderFields covers the fields with no other
+// validation, which would otherwise never be exercised.
+func TestUnresolvedInAllPlaceholderFields(t *testing.T) {
+	for _, k := range []string{"SAP_MCP_TEST_CN", "SAP_MCP_TEST_OA"} {
+		t.Setenv(k, "")
+		require.NoError(t, os.Unsetenv(k))
+	}
+	data := `{"default_system":"a","systems":{"a":{"connection_name":"${env:SAP_MCP_TEST_CN}","host":"https://h","client":"100","oauth2_client_id":"${env:SAP_MCP_TEST_OA}"}}}`
+	_, err := sapmcpconfig.Parse([]byte(data))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection_name references ${env:SAP_MCP_TEST_CN}")
+	assert.Contains(t, err.Error(), "oauth2_client_id references ${env:SAP_MCP_TEST_OA}")
+}
+
+// TestEnvPlaceholderUnsetIsErrorYAML mirrors the JSON unset path, which was the
+// only one the fixtures exercised.
+func TestEnvPlaceholderUnsetIsErrorYAML(t *testing.T) {
+	unsetEnvFixture(t)
+	_, err := sapmcpconfig.Load("testdata/env_placeholders.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "references ${env:SAP_MCP_TEST_HOSTNAME}, which is not set in the environment")
 }
 
 // envFixtureVars is the environment for testdata/env_placeholders.* — kept

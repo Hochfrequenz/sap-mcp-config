@@ -7,11 +7,8 @@
 package sapmcpconfig
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,63 +36,121 @@ var envPlaceholder = regexp.MustCompile(`\$\{env:(?P<var>[A-Za-z_][A-Za-z0-9_]*)
 // matches are read by name rather than by a bare literal index.
 var envPlaceholderVar = envPlaceholder.SubexpIndex("var")
 
-// interpolateEnv replaces ${env:VAR} with the environment value in every string
-// of a decoded document.
+// fieldStatus records what interpolation did to a single field.
+type fieldStatus struct {
+	// fromEnv is true when any part of the value came from a placeholder.
+	fromEnv bool
+	// unusable is true when a placeholder could not be turned into a usable
+	// value, so the field has no meaningful content to validate.
+	unusable bool
+}
+
+// placeholderReport is the outcome of interpolating one config: the errors to
+// report, plus per-field status so validation can skip fields that have no
+// usable value and avoid echoing values that came from the environment.
+//
+// status is keyed by system name and then field name; the empty system name
+// holds the top-level default_system entry.
+type placeholderReport struct {
+	messages []string
+	status   map[string]map[string]fieldStatus
+}
+
+func (r placeholderReport) get(system, field string) fieldStatus {
+	return r.status[system][field]
+}
+
+// unusable reports whether field has no usable value, because a placeholder in
+// it could not be resolved.
+func (r placeholderReport) unusable(system, field string) bool {
+	return r.get(system, field).unusable
+}
+
+// describe renders value for an error message, withholding it when it came from
+// the environment — an env-supplied host or client may itself be sensitive, and
+// the user did not write it in the file, so echoing it back helps nobody.
+func (r placeholderReport) describe(system, field, value string) string {
+	if r.get(system, field).fromEnv {
+		return "the value taken from the environment"
+	}
+	return fmt.Sprintf("%q", value)
+}
+
+func (r *placeholderReport) addf(system, field, format string, args ...any) {
+	detail := fmt.Sprintf(format, args...)
+	if system == "" {
+		r.messages = append(r.messages, field+" "+detail)
+		return
+	}
+	r.messages = append(r.messages, fmt.Sprintf("system %q: %s %s", system, field, detail))
+}
+
+func (r *placeholderReport) setStatus(system, field string, st fieldStatus) {
+	if r.status[system] == nil {
+		r.status[system] = map[string]fieldStatus{}
+	}
+	r.status[system][field] = st
+}
+
+// resolve replaces every ${env:VAR} in value and records what happened.
 //
 // Substitution is single-pass: replacement text is never rescanned, so a secret
 // whose value happens to contain ${env:...} cannot be used to read another
 // variable.
 //
-// Placeholders whose variable is unset are left verbatim; [Config.Validate]
-// turns those into a collected configuration error rather than silently
-// yielding an empty string.
-func interpolateEnv(v any) any {
-	switch t := v.(type) {
-	case string:
-		return envPlaceholder.ReplaceAllStringFunc(t, func(match string) string {
-			name := envPlaceholder.FindStringSubmatch(match)[envPlaceholderVar]
-			if value, ok := os.LookupEnv(name); ok {
-				return value
-			}
+// Detection happens here rather than by re-scanning the finished value, because
+// only at this point do we still know the placeholder came from the config
+// document. Re-scanning afterwards would misread a secret that legitimately
+// contains "${env:...}" as an unresolved placeholder — and would build the error
+// message out of that secret's plaintext.
+func (r *placeholderReport) resolve(system, field, value string) string {
+	var st fieldStatus
+	resolved := envPlaceholder.ReplaceAllStringFunc(value, func(match string) string {
+		name := envPlaceholder.FindStringSubmatch(match)[envPlaceholderVar]
+		st.fromEnv = true
+		env, ok := os.LookupEnv(name)
+		switch {
+		case !ok:
+			st.unusable = true
+			r.addf(system, field, "references ${env:%s}, which is not set in the environment", name)
 			return match
-		})
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for key, item := range t {
-			out[key] = interpolateEnv(item)
+		case env == "":
+			// Defined-but-empty is the shape an unpopulated CI secret takes, and
+			// letting it through would silently strip a credential — for user and
+			// password that even flips the system to OAuth2.
+			st.unusable = true
+			r.addf(system, field, "references ${env:%s}, which is set but empty", name)
+			return env
 		}
-		return out
-	case map[any]any:
-		out := make(map[any]any, len(t))
-		for key, item := range t {
-			out[key] = interpolateEnv(item)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, item := range t {
-			out[i] = interpolateEnv(item)
-		}
-		return out
-	default:
-		return v
+		return env
+	})
+	if st != (fieldStatus{}) {
+		r.setStatus(system, field, st)
 	}
+	return resolved
 }
 
-// unresolvedEnvVar returns the name of the first ${env:VAR} in value whose
-// variable is unset.
+// interpolateSystems resolves ${env:VAR} placeholders in every string field of
+// cfg, in place, and reports what could not be resolved.
 //
-// Only a genuinely unset variable counts. Because interpolation is single-pass,
-// a placeholder that survives into a resolved value must have come from the
-// environment itself — and if that variable is set, the text is a literal the
-// user meant to keep, not a mistake.
-func unresolvedEnvVar(value string) (string, bool) {
-	for _, m := range envPlaceholder.FindAllStringSubmatch(value, -1) {
-		if _, ok := os.LookupEnv(m[envPlaceholderVar]); !ok {
-			return m[envPlaceholderVar], true
-		}
+// Interpolating the already-decoded struct — rather than a generic document —
+// is deliberate: it keeps each value exactly as the YAML/JSON decoder produced
+// it. Re-encoding a generic document would let YAML re-tag unquoted scalars, so
+// a password of 007 would silently load as 7.
+func interpolateSystems(cfg *Config) placeholderReport {
+	report := placeholderReport{status: map[string]map[string]fieldStatus{}}
+	cfg.DefaultSystem = report.resolve("", "default_system", cfg.DefaultSystem)
+	for name, sys := range cfg.Systems {
+		sys.ConnectionName = report.resolve(name, "connection_name", sys.ConnectionName)
+		sys.Host = report.resolve(name, "host", sys.Host)
+		sys.Client = report.resolve(name, "client", sys.Client)
+		sys.User = report.resolve(name, "user", sys.User)
+		sys.Password = report.resolve(name, "password", sys.Password)
+		sys.Language = report.resolve(name, "language", sys.Language)
+		sys.OAuth2ClientID = report.resolve(name, "oauth2_client_id", sys.OAuth2ClientID)
+		cfg.Systems[name] = sys
 	}
-	return "", false
+	return report
 }
 
 // Supported config file extensions for automatic format detection in [Load].
@@ -197,20 +252,8 @@ func LoadDefault() (*Config, error) {
 // ParseYAML unmarshals YAML bytes into a Config and validates it.
 // ${env:VAR} placeholders are resolved from the environment first.
 func ParseYAML(data []byte) (*Config, error) {
-	// Decode into a generic document so interpolation sees the same string
-	// values the Python implementation does, then re-encode and decode into
-	// Config. Interpolating the raw file bytes instead would corrupt any secret
-	// containing a quote or backslash.
-	var doc any
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parsing config (expected YAML): %w", err)
-	}
-	resolved, err := yaml.Marshal(interpolateEnv(doc))
-	if err != nil {
-		return nil, fmt.Errorf("parsing config (expected YAML): %w", err)
-	}
 	var cfg Config
-	if err := yaml.Unmarshal(resolved, &cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config (expected YAML): %w", err)
 	}
 	return normalizeAndValidate(&cfg)
@@ -219,34 +262,17 @@ func ParseYAML(data []byte) (*Config, error) {
 // Parse unmarshals JSON bytes into a Config and validates it.
 // ${env:VAR} placeholders are resolved from the environment first.
 func Parse(data []byte) (*Config, error) {
-	// See ParseYAML for why this decodes into a generic document first.
-	var doc any
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber() // keep numbers byte-exact across the re-encode
-	if err := dec.Decode(&doc); err != nil {
-		return nil, fmt.Errorf("parsing config (expected JSON): %w", err)
-	}
-	// json.Unmarshal rejects trailing data, and decoding by hand must keep doing
-	// so. Decoder.More() is not enough: it stops at a closing bracket, so it
-	// reports false for inputs like `{...}}` and `{...}]`. Requiring the next
-	// decode to hit EOF covers every case, including those.
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("parsing config (expected JSON): unexpected data after top-level value")
-	}
-	resolved, err := json.Marshal(interpolateEnv(doc))
-	if err != nil {
-		return nil, fmt.Errorf("parsing config (expected JSON): %w", err)
-	}
 	var cfg Config
-	if err := json.Unmarshal(resolved, &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config (expected JSON): %w", err)
 	}
 	return normalizeAndValidate(&cfg)
 }
 
-// normalizeAndValidate validates and normalizes a parsed Config.
+// normalizeAndValidate interpolates, validates and normalizes a parsed Config.
 func normalizeAndValidate(cfg *Config) (*Config, error) {
-	if err := cfg.Validate(); err != nil {
+	report := interpolateSystems(cfg)
+	if err := cfg.validate(report); err != nil {
 		return nil, err
 	}
 	for name, sys := range cfg.Systems {
@@ -262,41 +288,52 @@ func normalizeAndValidate(cfg *Config) (*Config, error) {
 // Validate checks that the Config is well-formed.
 // It collects all errors so users can fix everything in one pass.
 func (c *Config) Validate() error {
-	var errs []string
+	return c.validate(placeholderReport{})
+}
+
+// validate checks the Config, taking into account which fields could not be
+// resolved from the environment. A zero report means no interpolation happened,
+// which is what [Config.Validate] passes for a hand-built Config.
+func (c *Config) validate(report placeholderReport) error {
+	// Placeholder problems are reported alongside everything else so the user
+	// still fixes the whole file in one pass.
+	errs := append([]string(nil), report.messages...)
 	if len(c.Systems) == 0 {
 		return fmt.Errorf("config has no systems defined")
 	}
-	if v, ok := unresolvedEnvVar(c.DefaultSystem); ok {
-		errs = append(errs, fmt.Sprintf("default_system references ${env:%s}, which is not set in the environment", v))
-	} else if _, ok := c.Systems[c.DefaultSystem]; !ok {
-		errs = append(errs, fmt.Sprintf("default_system %q not found in systems", c.DefaultSystem))
+	if !report.unusable("", "default_system") {
+		if _, ok := c.Systems[c.DefaultSystem]; !ok {
+			errs = append(errs, fmt.Sprintf("default_system %q not found in systems", c.DefaultSystem))
+		}
 	}
 	for name, sys := range c.Systems {
-		// A field still holding a placeholder has no meaningful value yet, so its
-		// remaining checks are skipped — reporting `host must start with http://,
-		// got "${env:SAP_HOST}"` on top of the unset-variable error would just be
-		// noise. Crucially this also suppresses the both-or-neither check, which
-		// would otherwise read an unresolved user and password as a deliberate
-		// OAuth2 system.
-		unresolved := collectUnresolved(name, sys)
-		errs = append(errs, unresolved.messages...)
-		if !unresolved.covers("host") {
+		// A field whose placeholder could not be resolved has no meaningful value,
+		// so its remaining checks are skipped — reporting `host must start with
+		// http://` on top of the unset-variable error would just be noise.
+		// Crucially this also suppresses the both-or-neither check, which would
+		// otherwise read an unresolved user and password as a deliberate OAuth2
+		// system.
+		if !report.unusable(name, "host") {
 			if sys.Host == "" {
 				errs = append(errs, fmt.Sprintf("system %q: host is required", name))
 			} else if !strings.HasPrefix(sys.Host, "http://") && !strings.HasPrefix(sys.Host, "https://") {
-				errs = append(errs, fmt.Sprintf("system %q: host must start with http:// or https://, got %q", name, sys.Host))
+				errs = append(errs, fmt.Sprintf("system %q: host must start with http:// or https://, got %s",
+					name, report.describe(name, "host", sys.Host)))
 			}
 		}
-		if !unresolved.covers("client") && sys.Client != "" && (len(sys.Client) != 3 || !isDigits(sys.Client)) {
-			errs = append(errs, fmt.Sprintf("system %q: client must be a 3-digit string (e.g. \"100\"), got %q", name, sys.Client))
+		if !report.unusable(name, "client") && sys.Client != "" && (len(sys.Client) != 3 || !isDigits(sys.Client)) {
+			errs = append(errs, fmt.Sprintf("system %q: client must be a 3-digit string (e.g. \"100\"), got %s",
+				name, report.describe(name, "client", sys.Client)))
 		}
-		if !unresolved.covers("user") && !unresolved.covers("password") && (sys.User == "") != (sys.Password == "") {
+		if !report.unusable(name, "user") && !report.unusable(name, "password") &&
+			(sys.User == "") != (sys.Password == "") {
 			errs = append(errs, fmt.Sprintf("system %q: must have both user and password, or neither (for OAuth2)", name))
 		}
-		if sys.Language != "" {
+		if !report.unusable(name, "language") && sys.Language != "" {
 			lang := strings.ToUpper(sys.Language)
 			if lang != "DE" && lang != "EN" {
-				errs = append(errs, fmt.Sprintf("system %q: language must be \"DE\" or \"EN\", got %q", name, sys.Language))
+				errs = append(errs, fmt.Sprintf("system %q: language must be \"DE\" or \"EN\", got %s",
+					name, report.describe(name, "language", sys.Language)))
 			}
 		}
 	}
@@ -304,54 +341,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid configuration:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
-}
-
-// unresolvedPlaceholders holds the fields of one system whose ${env:VAR}
-// placeholder could not be resolved.
-//
-// Produced by collectUnresolved and consumed by [Config.Validate], which
-// reports messages and uses covers to skip the remaining checks on an
-// affected field.
-type unresolvedPlaceholders struct {
-	// messages holds one ready-to-report error per affected field, naming the
-	// unset variable.
-	messages []string
-	// fieldNames holds the affected field names, e.g. {"user", "password"}.
-	fieldNames map[string]bool
-}
-
-// covers reports whether field holds an unresolved placeholder, so its value is
-// not usable yet.
-func (u unresolvedPlaceholders) covers(field string) bool {
-	return u.fieldNames[field]
-}
-
-// collectUnresolved finds every field of sys still holding a placeholder.
-//
-// Language is deliberately absent: an unresolved placeholder there is already
-// rejected by the existing DE/EN check, and in Python by the Literal field
-// type — reporting it here would make the two implementations disagree.
-//
-// Only the variable name is reported, never the value it resolved to, so a
-// validation failure cannot echo a credential.
-func collectUnresolved(name string, sys SAPSystem) unresolvedPlaceholders {
-	fields := []struct{ field, value string }{
-		{"connection_name", sys.ConnectionName},
-		{"host", sys.Host},
-		{"client", sys.Client},
-		{"user", sys.User},
-		{"password", sys.Password},
-		{"oauth2_client_id", sys.OAuth2ClientID},
-	}
-	result := unresolvedPlaceholders{fieldNames: make(map[string]bool)}
-	for _, f := range fields {
-		if v, ok := unresolvedEnvVar(f.value); ok {
-			result.fieldNames[f.field] = true
-			result.messages = append(result.messages,
-				fmt.Sprintf("system %q: %s references ${env:%s}, which is not set in the environment", name, f.field, v))
-		}
-	}
-	return result
 }
 
 func isDigits(s string) bool {

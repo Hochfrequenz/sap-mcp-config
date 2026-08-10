@@ -132,7 +132,7 @@ systems:
 
 ### Keeping secrets out of the config file
 
-Any string value may contain an `${env:VAR}` placeholder, which is replaced with that environment variable's value when the config is loaded. This lets you split the file into two parts: the **structure** - which systems exist, their hosts, clients and connection names - stays in `systems.json`, while the **credentials** come from your environment, CI secret store, or password manager.
+The string fields of a system - `connection_name`, `host`, `client`, `user`, `password`, `language` and `oauth2_client_id` - plus the top-level `default_system` may contain an `${env:VAR}` placeholder, which is replaced with that environment variable's value when the config is loaded. This lets you split the file into two parts: the **structure** - which systems exist, their hosts, clients and connection names - stays in `systems.json`, while the **credentials** come from your environment, CI secret store, or password manager.
 
 The result is a `systems.json` you can commit to a repository and share with your team:
 
@@ -181,20 +181,23 @@ export SAP_DEV_PASSWORD=...
 
 The important half of this table is the bottom: text that *looks* like a placeholder but does not match the exact form is used verbatim, so a near-miss such as `${SAP_PASSWORD}` becomes your literal password rather than an error. A genuine placeholder whose variable is unset always fails loudly, so the two cases can never be confused.
 - **An unset variable is an error**, reported alongside every other validation problem. It never resolves to an empty string - so a forgotten `export` cannot silently turn a user/password system into an OAuth2 one.
-- Substitution runs **once**. A value pulled from the environment is not scanned again, so a secret that happens to contain `${env:...}` is kept as literal text rather than triggering a further lookup.
-- Placeholders work in JSON and YAML alike, and in every string field. `language` is the one exception worth noting - it only accepts `DE` or `EN`, so an unresolved placeholder there is reported as an invalid language.
-
-With `load_default()` / `LoadDefault()`, variables defined in a `.env` file in the current directory are available to placeholders too.
+- **A variable that is set but empty is also an error.** `SAP_PASSWORD=` is the shape an unpopulated CI secret takes, and accepting it would strip the credential just as silently.
+- Substitution runs **once**. A value pulled from the environment is not scanned again, so a secret that happens to contain `${env:...}` is kept as literal text rather than triggering a further lookup - and it does not matter whether that inner name refers to a real variable.
+- Placeholders are resolved in the fields listed above, in JSON and YAML alike. They are **not** resolved in `tls_skip_verify` (which is a boolean, not a string) nor in the system *names* themselves.
+- `${env:VAR}` is resolved in `.env`-provided variables too, when you load via `load_default()` / `LoadDefault()`.
 
 A missing variable is reported like any other error:
 
 ```
 invalid configuration:
   - system "dev": password references ${env:SAP_DEV_PASSWORD}, which is not set in the environment
+  - system "prod": user references ${env:SAP_PROD_USER}, which is set but empty
 ```
 
 > [!NOTE]
-> Only the variable *name* appears in error messages, never the value it resolved to.
+> Values taken from the environment are not echoed back in error messages. Where a literal from the file would be quoted - `host must start with http:// or https://, got "ftp://x"` - an env-supplied value is reported as `got the value taken from the environment` instead.
+>
+> In Python this applies to the message text. `pydantic.ValidationError` separately includes the raw input it was given, which has always contained whatever the config held, so avoid printing the full exception in contexts where that matters.
 
 ### Finding your `connection_name` in SAP Logon
 
