@@ -29,6 +29,7 @@ The default config path (`~/.config/sap-mcp/systems.json`) follows the [XDG Base
 - **One config file, two languages** - Go and Python read the same config, guaranteed by shared test fixtures
 - **JSON and YAML** - use whichever format you prefer (auto-detected by file extension)
 - **Validates eagerly** - reports _all_ errors at once so users fix everything in one pass
+- **Secrets can stay out of the file** - `${env:VAR}` placeholders pull values from the environment, so `systems.json` holds structure only and becomes safe to commit and share
 - **Passwords never leak in print/log output** - masked in `str()`/`repr()`/`fmt.Println()`/`fmt.Sprintf("%+v")` (Go: `fmt.Formatter`; Python: `pydantic.SecretStr`)
 - **Immutable after loading** - frozen Pydantic models in Python; in Go, use the returned structs as read-only
 - **`.env` file support** - `SAP_CONFIG_FILE` can be set in a `.env` file
@@ -128,6 +129,75 @@ systems:
 - `client`, if set, must be exactly 3 digits
 - `language`, if set, must be `"DE"` or `"EN"`
 - Either both `user` and `password` must be set, or neither (for OAuth2)
+
+### Keeping secrets out of the config file
+
+The string fields of a system - `connection_name`, `host`, `client`, `user`, `password`, `language` and `oauth2_client_id` - plus the top-level `default_system` may contain an `${env:VAR}` placeholder, which is replaced with that environment variable's value when the config is loaded. This lets you split the file into two parts: the **structure** - which systems exist, their hosts, clients and connection names - stays in `systems.json`, while the **credentials** come from your environment, CI secret store, or password manager.
+
+The result is a `systems.json` you can commit to a repository and share with your team:
+
+```json
+{
+  "default_system": "dev",
+  "systems": {
+    "dev": {
+      "connection_name": "DEV - ERP Development",
+      "host": "https://dev-sap.example.com:44300",
+      "client": "100",
+      "user": "${env:SAP_DEV_USER}",
+      "password": "${env:SAP_DEV_PASSWORD}"
+    },
+    "prod": {
+      "connection_name": "PROD - ERP Production",
+      "host": "https://prod-sap.example.com:44300",
+      "client": "200",
+      "user": "${env:SAP_PROD_USER}",
+      "password": "${env:SAP_PROD_PASSWORD}"
+    }
+  }
+}
+```
+
+```bash
+export SAP_DEV_USER=DEV_USER
+export SAP_DEV_PASSWORD=...
+```
+
+**Rules:**
+
+- Only the exact form `${env:NAME}` is a placeholder, where `NAME` is a plain identifier: letters, digits and underscores, not starting with a digit. Anything that does not match that form is left alone as literal text - see the table below.
+- A placeholder can be the whole value or embedded in a larger string, and a string may contain several: `"host": "https://${env:SAP_HOSTNAME}:${env:SAP_PORT}"`.
+
+**What counts as a placeholder:**
+
+| In your config | Result |
+|---|---|
+| `${env:SAP_DEV_PASSWORD}` | Replaced. If the variable is unset, loading **fails with an error** |
+| `https://${env:HOST}:${env:PORT}` | Both replaced |
+| `${env:not an identifier}` | Literal text - spaces are not allowed in a name |
+| `${env:2FA_TOKEN}` | Literal text - a name cannot start with a digit |
+| `${SAP_PASSWORD}` | Literal text - missing the `env:` prefix |
+| `$env:SAP_PASSWORD` | Literal text - missing the braces |
+
+The important half of this table is the bottom: text that *looks* like a placeholder but does not match the exact form is used verbatim, so a near-miss such as `${SAP_PASSWORD}` becomes your literal password rather than an error. A genuine placeholder whose variable is unset always fails loudly, so the two cases can never be confused.
+- **An unset variable is an error**, reported alongside every other validation problem. It never resolves to an empty string - so a forgotten `export` cannot silently turn a user/password system into an OAuth2 one.
+- **A variable that is set but empty is also an error.** `SAP_PASSWORD=` is the shape an unpopulated CI secret takes, and accepting it would strip the credential just as silently.
+- Substitution runs **once**. A value pulled from the environment is not scanned again, so a secret that happens to contain `${env:...}` is kept as literal text rather than triggering a further lookup - and it does not matter whether that inner name refers to a real variable.
+- Placeholders are resolved in the fields listed above, in JSON and YAML alike. They are **not** resolved in `tls_skip_verify` (which is a boolean, not a string) nor in the system *names* themselves.
+- `${env:VAR}` is resolved in `.env`-provided variables too, when you load via `load_default()` / `LoadDefault()`.
+
+A missing variable is reported like any other error:
+
+```
+invalid configuration:
+  - system "dev": password references ${env:SAP_DEV_PASSWORD}, which is not set in the environment
+  - system "prod": user references ${env:SAP_PROD_USER}, which is set but empty
+```
+
+> [!NOTE]
+> Values taken from the environment are not echoed back in error messages. Where a literal from the file would be quoted - `host must start with http:// or https://, got "ftp://x"` - an env-supplied value is reported as `got the value taken from the environment` instead.
+>
+> This includes the exception itself: because interpolation happens before validation, the document handed to the validator holds resolved secrets, so `load()`, `parse()` and `parse_yaml()` raise a `ValidationError` with its `input` withheld. Printing the full exception is safe.
 
 ### Finding your `connection_name` in SAP Logon
 
