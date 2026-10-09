@@ -158,6 +158,8 @@ The result is a `systems.json` you can commit to a repository and share with you
 }
 ```
 
+Each variable has a name and a value. The name must match the name in your `${env:...}` placeholder, and the value is the content, for example your SAP username. How you set the variables depends on your operating system.
+
 On Linux and macOS, set the variables in your shell:
 
 ```bash
@@ -172,7 +174,7 @@ On Windows, `export` does not exist. In PowerShell, you can store the variables 
 [Environment]::SetEnvironmentVariable("SAP_DEV_PASSWORD", "...", "User")
 ```
 
-The first argument is the variable name, which must match the name in your `${env:...}` placeholder. The second argument is the value. The third argument, `"User"`, is the scope of the variable (your Windows user account) - keep it exactly as written.
+The first argument is the variable name and the second argument is the value. The third argument, `"User"`, is the scope of the variable (your Windows user account) - keep it exactly as written.
 
 Alternatively, use the graphical way:
 
