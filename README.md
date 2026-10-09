@@ -158,10 +158,29 @@ The result is a `systems.json` you can commit to a repository and share with you
 }
 ```
 
+On Linux and macOS, set the variables in your shell:
+
 ```bash
-export SAP_DEV_USER=DEV_USER
+export SAP_DEV_USER=YOUR_DEV_USER
 export SAP_DEV_PASSWORD=...
 ```
+
+On Windows, `export` does not exist. In PowerShell, you can store the variables permanently for your user account, from any folder:
+
+```powershell
+[Environment]::SetEnvironmentVariable("SAP_DEV_USER", "YOUR_DEV_USER", "User")
+[Environment]::SetEnvironmentVariable("SAP_DEV_PASSWORD", "...", "User")
+```
+
+The first argument is the variable name, which must match the name in your `${env:...}` placeholder. The second argument is the value. The third argument, `"User"`, is the scope of the variable (your Windows user account) - keep it exactly as written.
+
+Alternatively, use the graphical way:
+
+1. Press the Windows key and search for "Edit environment variables for your account".
+2. Under "User variables", click "New".
+3. Enter the variable name (for example `SAP_DEV_USER`) and its value, then confirm with OK.
+
+A program that is already running does not see new variables, so restart the terminal or editor that starts the MCP server afterwards.
 
 **Rules:**
 
