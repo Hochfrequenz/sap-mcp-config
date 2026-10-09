@@ -167,22 +167,22 @@ export SAP_DEV_USER=YOUR_DEV_USER
 export SAP_DEV_PASSWORD=...
 ```
 
-On Windows, `export` does not exist. In PowerShell, you can store the variables permanently for your user account, from any folder:
+In PowerShell, `export` does not exist. Instead, you can store the variables permanently for your user account, from any folder:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("SAP_DEV_USER", "YOUR_DEV_USER", "User")
-[Environment]::SetEnvironmentVariable("SAP_DEV_PASSWORD", "...", "User")
+[Environment]::SetEnvironmentVariable("SAP_DEV_USER", 'YOUR_DEV_USER', "User")
+[Environment]::SetEnvironmentVariable("SAP_DEV_PASSWORD", '...', "User")
 ```
 
-The first argument is the variable name and the second argument is the value. The third argument, `"User"`, is the scope of the variable (your Windows user account) - keep it exactly as written.
+The first argument is the variable name and the second argument is the value. Write the value in single quotes, so that characters such as `$` in a password are kept as typed. The third argument, `"User"`, is the scope of the variable (your Windows user account) - keep it exactly as written.
 
-Alternatively, use the graphical way:
+PowerShell saves the commands you type in its history. To keep your password out of it, use the graphical way instead:
 
 1. Press the Windows key and search for "Edit environment variables for your account".
 2. Under "User variables", click "New".
-3. Enter the variable name (for example `SAP_DEV_USER`) and its value, then confirm with OK.
+3. Enter the variable name (for example `SAP_DEV_USER`) and its value, then confirm with OK. Confirm with OK in the "Environment Variables" window as well, otherwise the variable is not saved.
 
-A program that is already running does not see new variables, so restart the terminal or editor that starts the MCP server afterwards.
+A program that is already running does not see new variables. Close the terminal and quit the application that starts the MCP server completely, then start it again.
 
 **Rules:**
 
