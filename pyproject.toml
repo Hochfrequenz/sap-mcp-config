@@ -51,7 +51,7 @@ linting = [
     {include-group = "tests"},
 ]
 type_check = [
-    "mypy==2.4.0",
+    "mypy==2.4.1",
     "types-PyYAML>=6",
     {include-group = "tests"},
 ]
