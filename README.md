@@ -3,7 +3,7 @@
 ![Go Tests](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Go%20Tests/badge.svg)
 ![Go Coverage](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Go%20Coverage/badge.svg)
 ![Go Lint](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Go%20Lint/badge.svg)
-[![Go Reference](https://pkg.go.dev/badge/github.com/Hochfrequenz/sap-mcp-config.svg)](https://pkg.go.dev/github.com/Hochfrequenz/sap-mcp-config)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Hochfrequenz/sap-mcp-config/v2.svg)](https://pkg.go.dev/github.com/Hochfrequenz/sap-mcp-config/v2)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Hochfrequenz/sap-mcp-config)](https://goreportcard.com/report/github.com/Hochfrequenz/sap-mcp-config)
 ![Python Tests](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Python%20Tests/badge.svg)
 ![Python Coverage](https://github.com/Hochfrequenz/sap-mcp-config/workflows/Python%20Coverage/badge.svg)
@@ -118,7 +118,7 @@ systems:
 | `client` | string | no | `""` | SAP client/mandant, must be exactly 3 digits (e.g. `"100"`) |
 | `user` | string | conditional | `""` | SAP username (omit for OAuth2) |
 | `password` | string | conditional | `""` | SAP password (omit for OAuth2) |
-| `language` | string | no | `"EN"` | Login language: `"DE"` or `"EN"` |
+| `language` | string | no | `"EN"` | Login language; must be one of the languages supported by the MCP server reading the file (case-insensitive). Defaults to `EN`, so if a server does not support EN, set it explicitly. |
 | `tls_skip_verify` | bool | no | `false` | Skip TLS certificate verification |
 | `oauth2_client_id` | string | no | `""` | OAuth2 client ID for token-based auth |
 
@@ -127,7 +127,7 @@ systems:
 - `default_system` must reference an existing system key
 - `host` is required and must start with `http://` or `https://`
 - `client`, if set, must be exactly 3 digits
-- `language`, if set, must be `"DE"` or `"EN"`
+- `language` must be one of the languages supported by the MCP server reading the file (case-insensitive). It defaults to `EN`, so if a server does not support EN, set it explicitly.
 - Either both `user` and `password` must be set, or neither (for OAuth2)
 
 ### Keeping secrets out of the config file
@@ -317,13 +317,16 @@ from sap_mcp_config import load_default
 
 try:
     # Load from SAP_CONFIG_FILE env var or ~/.config/sap-mcp/systems.json
-    cfg = load_default()
+    # supported_languages is required: the languages your server can handle
+    cfg = load_default(supported_languages=["DE", "EN"])
 except FileNotFoundError:
     print("Config file not found. Create ~/.config/sap-mcp/systems.json")
     sys.exit(1)
 except ValidationError as e:
     print(f"Configuration error:\n{e}")
     sys.exit(1)
+# A ValueError for an empty supported_languages is a programming error, not a
+# configuration problem, so it is deliberately not caught above.
 
 # Access the default system
 dev = cfg.get_default()
@@ -339,6 +342,21 @@ print(dev)  # password=SecretStr('**********')
 # Access the actual password value when needed
 password = dev.password.get_secret_value()
 ```
+
+#### Supported languages (developers)
+
+Whether a system's `language` is acceptable depends on the MCP server, not on this package, so every entry point requires the languages your server supports:
+
+- Python: `parse`, `parse_yaml`, `load` and `load_default` take a keyword-only `supported_languages` argument.
+- Go: `Load`, `LoadDefault`, `Parse`, `ParseYAML` and `Config.Validate` take a `[]string`.
+
+Details:
+
+- The list is case-insensitive; entries are uppercased, deduplicated and sorted.
+- An empty list, or one containing an empty string, is a programming error and fails before any file is read: `supported languages must not be empty` / `supported languages must not contain an empty string`. In Python this is a `ValueError` (not a `ValidationError`); a bare string or non-string entries raise `TypeError`.
+- A language outside the list is reported alongside all other problems: `system "dev": language must be one of "DE", "EN", got "IT"`.
+- An omitted or empty `language` still becomes `EN` and is then checked like any other value, so a server that does not support `EN` rejects a system without an explicit language.
+- Directly constructed objects: in Python, `Config(...)` and `Config.model_validate(...)` without the loaders do not know the supported languages and skip the membership check (the value is still uppercased and defaulted). In Go, struct literals are never validated; `Validate(supportedLanguages)` requires the list and applies the same rules, including the empty-means-`EN` rule.
 
 #### Extending the Configuration
 
@@ -375,7 +393,7 @@ uv run --group coverage coverage run -m pytest unittests    # coverage
 #### Installation
 
 ```bash
-go get github.com/Hochfrequenz/sap-mcp-config
+go get github.com/Hochfrequenz/sap-mcp-config/v2
 ```
 
 #### Usage
@@ -387,12 +405,13 @@ import (
     "fmt"
     "os"
 
-    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+    sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 )
 
 func main() {
     // Load from SAP_CONFIG_FILE env var or ~/.config/sap-mcp/systems.json
-    cfg, err := sapmcpconfig.LoadDefault()
+    // The list is the languages your server supports; it must not be empty.
+    cfg, err := sapmcpconfig.LoadDefault([]string{"DE", "EN"})
     if err != nil {
         fmt.Fprintf(os.Stderr, "Configuration error:\n%s\n", err)
         os.Exit(1)
@@ -451,3 +470,11 @@ invalid configuration:
   - system "dev": must have both user and password, or neither (for OAuth2)
 ```
 
+### Migrating from v1 to v2
+
+v2 makes the supported languages an explicit argument instead of the hardcoded `"DE"` / `"EN"`.
+
+- Go: `go get github.com/Hochfrequenz/sap-mcp-config/v2@v2.0.0` and change the import path to `github.com/Hochfrequenz/sap-mcp-config/v2`.
+- Add the new argument to every call. Pass `["DE", "EN"]` (Go: `[]string{"DE", "EN"}`) to keep the v1 behaviour.
+- Go: `Validate()` becomes `Validate(supportedLanguages)`.
+- The error message changed from `language must be "DE" or "EN"` to `language must be one of "DE", "EN"`.

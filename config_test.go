@@ -7,13 +7,16 @@ import (
 	"os"
 	"testing"
 
-	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config"
+	sapmcpconfig "github.com/Hochfrequenz/sap-mcp-config/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// langs is the supported-language set used by most tests.
+var langs = []string{"DE", "EN"}
+
 func TestLoadTestFixture(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	cfg, err := sapmcpconfig.Load("testdata/systems.json", langs)
 	require.NoError(t, err)
 
 	assert.Equal(t, "dev", cfg.DefaultSystem)
@@ -51,7 +54,7 @@ func TestLoadTestFixture(t *testing.T) {
 }
 
 func TestGetDefault(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	cfg, err := sapmcpconfig.Load("testdata/systems.json", langs)
 	require.NoError(t, err)
 	def := cfg.GetDefault()
 	assert.Equal(t, "https://dev-sap.example.com:44300", def.Host)
@@ -59,14 +62,14 @@ func TestGetDefault(t *testing.T) {
 
 func TestLanguageDefaultsToEN(t *testing.T) {
 	data := `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}`
-	cfg, err := sapmcpconfig.Parse([]byte(data))
+	cfg, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.NoError(t, err)
 	assert.Equal(t, "EN", cfg.Systems["s"].Language)
 }
 
 func TestLanguageCaseInsensitive(t *testing.T) {
 	data := `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p","language":"de"}}}`
-	cfg, err := sapmcpconfig.Parse([]byte(data))
+	cfg, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.NoError(t, err)
 	assert.Equal(t, "DE", cfg.Systems["s"].Language)
 }
@@ -120,13 +123,13 @@ func TestParseValidation(t *testing.T) {
 		{
 			name:    "invalid language",
 			json:    `{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"FR"}}}`,
-			wantErr: `language must be "DE" or "EN"`,
+			wantErr: `language must be one of "DE", "EN"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := sapmcpconfig.Parse([]byte(tt.json))
+			_, err := sapmcpconfig.Parse([]byte(tt.json), langs)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
@@ -135,13 +138,13 @@ func TestParseValidation(t *testing.T) {
 
 func TestParseMinimal(t *testing.T) {
 	data := `{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}`
-	cfg, err := sapmcpconfig.Parse([]byte(data))
+	cfg, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.NoError(t, err)
 	assert.Len(t, cfg.Systems, 1)
 }
 
 func TestSpecialCharacterPasswords(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/special_characters.json")
+	cfg, err := sapmcpconfig.Load("testdata/special_characters.json", langs)
 	require.NoError(t, err)
 
 	assert.Len(t, cfg.Systems, 3)
@@ -159,7 +162,7 @@ func TestSpecialCharacterPasswords(t *testing.T) {
 }
 
 func TestLoadYAMLFixture(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/systems.yaml")
+	cfg, err := sapmcpconfig.Load("testdata/systems.yaml", langs)
 	require.NoError(t, err)
 
 	assert.Equal(t, "dev", cfg.DefaultSystem)
@@ -181,10 +184,10 @@ func TestLoadYAMLFixture(t *testing.T) {
 }
 
 func TestLoadYAMLMatchesJSON(t *testing.T) {
-	jsonCfg, err := sapmcpconfig.Load("testdata/systems.json")
+	jsonCfg, err := sapmcpconfig.Load("testdata/systems.json", langs)
 	require.NoError(t, err)
 
-	yamlCfg, err := sapmcpconfig.Load("testdata/systems.yaml")
+	yamlCfg, err := sapmcpconfig.Load("testdata/systems.yaml", langs)
 	require.NoError(t, err)
 
 	// Same data, different format — must produce identical configs.
@@ -199,7 +202,7 @@ func TestLoadYAMLMatchesJSON(t *testing.T) {
 
 func TestParseYAML(t *testing.T) {
 	data := []byte("default_system: s\nsystems:\n  s:\n    host: \"https://x:443\"\n    client: \"100\"\n    user: u\n    password: p\n")
-	cfg, err := sapmcpconfig.ParseYAML(data)
+	cfg, err := sapmcpconfig.ParseYAML(data, langs)
 	require.NoError(t, err)
 	assert.Len(t, cfg.Systems, 1)
 	assert.Equal(t, "EN", cfg.Systems["s"].Language) // default applied
@@ -207,13 +210,13 @@ func TestParseYAML(t *testing.T) {
 
 func TestYAMLUnquotedClient(t *testing.T) {
 	data := []byte("default_system: s\nsystems:\n  s:\n    host: \"https://x:443\"\n    client: 100\n    user: u\n    password: p\n")
-	cfg, err := sapmcpconfig.ParseYAML(data)
+	cfg, err := sapmcpconfig.ParseYAML(data, langs)
 	require.NoError(t, err)
 	assert.Equal(t, "100", cfg.Systems["s"].Client)
 }
 
 func TestYAMLSpecialCharacters(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/special_characters.yaml")
+	cfg, err := sapmcpconfig.Load("testdata/special_characters.yaml", langs)
 	require.NoError(t, err)
 
 	tricky := cfg.Systems["tricky"]
@@ -231,20 +234,20 @@ func TestLoadYMLExtension(t *testing.T) {
 	tmp := t.TempDir() + "/config.yml"
 	require.NoError(t, os.WriteFile(tmp, data, 0o644))
 
-	cfg, err := sapmcpconfig.Load(tmp)
+	cfg, err := sapmcpconfig.Load(tmp, langs)
 	require.NoError(t, err)
 	assert.Equal(t, "dev", cfg.DefaultSystem)
 }
 
 func TestLoadFileNotFound(t *testing.T) {
-	_, err := sapmcpconfig.Load("nonexistent.json")
+	_, err := sapmcpconfig.Load("nonexistent.json", langs)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestLoadDefaultUsesEnvVar(t *testing.T) {
 	t.Setenv("SAP_CONFIG_FILE", "testdata/systems.json")
-	cfg, err := sapmcpconfig.LoadDefault()
+	cfg, err := sapmcpconfig.LoadDefault(langs)
 	require.NoError(t, err)
 	assert.Equal(t, "dev", cfg.DefaultSystem)
 }
@@ -252,7 +255,7 @@ func TestLoadDefaultUsesEnvVar(t *testing.T) {
 func TestMultipleValidationErrors(t *testing.T) {
 	// Two systems, both broken — both errors should appear.
 	data := `{"default_system":"a","systems":{"a":{"host":""},"b":{"host":"","user":"u"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `system "a"`)
 	assert.Contains(t, err.Error(), `system "b"`)
@@ -261,7 +264,7 @@ func TestMultipleValidationErrors(t *testing.T) {
 func TestReadmeExample(t *testing.T) {
 	// The README claims that multiple problems are reported in a single error.
 	data := `{"default_system":"missing","systems":{"dev":{"host":"ftp://wrong","client":"1","user":"u"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	msg := err.Error()
 	assert.Contains(t, msg, `default_system "missing" not found`)
@@ -271,7 +274,7 @@ func TestReadmeExample(t *testing.T) {
 }
 
 func TestPasswordMaskedInString(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	cfg, err := sapmcpconfig.Load("testdata/systems.json", langs)
 	require.NoError(t, err)
 
 	dev := cfg.Systems["dev"]
@@ -291,7 +294,7 @@ func TestPasswordMaskedInString(t *testing.T) {
 }
 
 func TestPasswordAccessible(t *testing.T) {
-	cfg, err := sapmcpconfig.Load("testdata/systems.json")
+	cfg, err := sapmcpconfig.Load("testdata/systems.json", langs)
 	require.NoError(t, err)
 	assert.Equal(t, "dev_secret", cfg.Systems["dev"].Password)
 }
@@ -304,13 +307,13 @@ func TestParseRejectsTrailingData(t *testing.T) {
 
 	for _, trailing := range []string{" true", "}", "]", ", {}", "garbage", `{"b":2}`} {
 		t.Run(trailing, func(t *testing.T) {
-			_, err := sapmcpconfig.Parse([]byte(valid + trailing))
+			_, err := sapmcpconfig.Parse([]byte(valid+trailing), langs)
 			require.Error(t, err)
 		})
 	}
 
 	t.Run("trailing whitespace is fine", func(t *testing.T) {
-		cfg, err := sapmcpconfig.Parse([]byte(valid + "\n  \n"))
+		cfg, err := sapmcpconfig.Parse([]byte(valid+"\n  \n"), langs)
 		require.NoError(t, err)
 		assert.Len(t, cfg.Systems, 1)
 	})
@@ -323,7 +326,7 @@ func TestYAMLScalarsSurviveInterpolation(t *testing.T) {
 	for _, raw := range []string{"007", "0100", "010", "0x1F", "1_000", "+1", "1e3", "1.10", "2001-12-14", "on"} {
 		t.Run(raw, func(t *testing.T) {
 			y := "default_system: a\nsystems:\n  a:\n    host: 'https://h'\n    client: '100'\n    user: u\n    password: " + raw + "\n"
-			cfg, err := sapmcpconfig.ParseYAML([]byte(y))
+			cfg, err := sapmcpconfig.ParseYAML([]byte(y), langs)
 			require.NoError(t, err)
 			assert.Equal(t, raw, cfg.Systems["a"].Password, "password text must survive verbatim")
 		})
@@ -339,7 +342,7 @@ func TestEnvValueContainingPlaceholderIsLiteral(t *testing.T) {
 	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_NEVER_SET"))
 
 	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_SECRET_WITH_PH}"}}}`
-	cfg, err := sapmcpconfig.Parse([]byte(data))
+	cfg, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.NoError(t, err)
 	assert.Equal(t, "hunter2${env:SAP_MCP_TEST_NEVER_SET}tail", cfg.Systems["a"].Password)
 }
@@ -352,7 +355,7 @@ func TestEnvPlaceholderEmptyValueIsError(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_EMPTY_PW", "")
 
 	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"${env:SAP_MCP_TEST_EMPTY_USER}","password":"${env:SAP_MCP_TEST_EMPTY_PW}"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "references ${env:SAP_MCP_TEST_EMPTY_USER}, which is set but empty")
 	assert.NotContains(t, err.Error(), "must have both user and password")
@@ -366,7 +369,7 @@ func TestEnvErrorsDoNotEchoResolvedValues(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_BAD_LANG", "TOPSECRET")
 
 	data := `{"default_system":"a","systems":{"a":{"host":"${env:SAP_MCP_TEST_BAD_HOST}","client":"${env:SAP_MCP_TEST_BAD_CLIENT}","user":"u","password":"p","language":"${env:SAP_MCP_TEST_BAD_LANG}"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	msg := err.Error()
 	assert.NotContains(t, msg, "secret-internal-host")
@@ -375,7 +378,7 @@ func TestEnvErrorsDoNotEchoResolvedValues(t *testing.T) {
 	assert.Contains(t, msg, "the value taken from the environment")
 	// A value written literally in the file is still echoed, as before.
 	literal := `{"default_system":"a","systems":{"a":{"host":"ftp://written-in-file","user":"u","password":"p"}}}`
-	_, err = sapmcpconfig.Parse([]byte(literal))
+	_, err = sapmcpconfig.Parse([]byte(literal), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ftp://written-in-file")
 }
@@ -388,7 +391,7 @@ func TestUnresolvedLanguageCollectedWithOtherErrors(t *testing.T) {
 		require.NoError(t, os.Unsetenv(k))
 	}
 	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"${env:SAP_MCP_TEST_UU}","password":"${env:SAP_MCP_TEST_PP}","language":"${env:SAP_MCP_TEST_LL}"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	msg := err.Error()
 	assert.Contains(t, msg, "user references ${env:SAP_MCP_TEST_UU}")
@@ -402,7 +405,7 @@ func TestUnresolvedFieldSkipsItsOtherChecks(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_CL", "")
 	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_CL"))
 	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"${env:SAP_MCP_TEST_CL}","user":"u","password":"p"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "client references ${env:SAP_MCP_TEST_CL}")
 	assert.NotContains(t, err.Error(), "3-digit")
@@ -416,7 +419,7 @@ func TestUnresolvedInAllPlaceholderFields(t *testing.T) {
 		require.NoError(t, os.Unsetenv(k))
 	}
 	data := `{"default_system":"a","systems":{"a":{"connection_name":"${env:SAP_MCP_TEST_CN}","host":"https://h","client":"100","oauth2_client_id":"${env:SAP_MCP_TEST_OA}"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection_name references ${env:SAP_MCP_TEST_CN}")
 	assert.Contains(t, err.Error(), "oauth2_client_id references ${env:SAP_MCP_TEST_OA}")
@@ -427,7 +430,7 @@ func TestUnresolvedInAllPlaceholderFields(t *testing.T) {
 func TestEnvDerivedDefaultSystemIsNotEchoed(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_DEF_NAME", "secret-system-name")
 	data := `{"default_system":"${env:SAP_MCP_TEST_DEF_NAME}","systems":{"dev":{"host":"https://x","client":"100","user":"u","password":"p"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "secret-system-name")
 	assert.Contains(t, err.Error(), "the value taken from the environment")
@@ -439,7 +442,7 @@ func TestSystemNamedEmptyStringIsStillPrefixed(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_EMPTY_NAME", "")
 	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_EMPTY_NAME"))
 	data := `{"default_system":"dev","systems":{"":{"host":"${env:SAP_MCP_TEST_EMPTY_NAME}"},"dev":{"host":"https://x","client":"100","user":"u","password":"p"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `system "": host references ${env:SAP_MCP_TEST_EMPTY_NAME}`)
 }
@@ -448,9 +451,9 @@ func TestSystemNamedEmptyStringIsStillPrefixed(t *testing.T) {
 // Python's, whose BeforeValidator has already uppercased the field.
 func TestInvalidLanguageReportsNormalizedValue(t *testing.T) {
 	data := `{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"fr"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `language must be "DE" or "EN", got "FR"`)
+	assert.Contains(t, err.Error(), `language must be one of "DE", "EN", got "FR"`)
 }
 
 // TestErrorQuotingEscapesSpecialCharacters pins that a quote or newline in a
@@ -464,7 +467,7 @@ func TestErrorQuotingEscapesSpecialCharacters(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	_, err = sapmcpconfig.Parse(data)
+	_, err = sapmcpconfig.Parse(data, langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `got "ftp://ho\"st\nline"`)
 }
@@ -473,11 +476,11 @@ func TestErrorQuotingEscapesSpecialCharacters(t *testing.T) {
 // leaking into the reported message order, which Python never does.
 func TestErrorOrderIsDeterministic(t *testing.T) {
 	data := `{"default_system":"a","systems":{"a":{"host":"ftp://one"},"b":{"host":"ftp://two"},"c":{"host":"ftp://three"},"d":{"host":"ftp://four"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	first := err.Error()
 	for i := 0; i < 50; i++ {
-		_, err := sapmcpconfig.Parse([]byte(data))
+		_, err := sapmcpconfig.Parse([]byte(data), langs)
 		require.Error(t, err)
 		require.Equal(t, first, err.Error(), "message order must not vary between runs")
 	}
@@ -487,7 +490,7 @@ func TestErrorOrderIsDeterministic(t *testing.T) {
 // only one the fixtures exercised.
 func TestEnvPlaceholderUnsetIsErrorYAML(t *testing.T) {
 	unsetEnvFixture(t)
-	_, err := sapmcpconfig.Load("testdata/env_placeholders.yaml")
+	_, err := sapmcpconfig.Load("testdata/env_placeholders.yaml", langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "references ${env:SAP_MCP_TEST_HOSTNAME}, which is not set in the environment")
 }
@@ -522,7 +525,7 @@ func unsetEnvFixture(t *testing.T) {
 
 func TestEnvPlaceholdersResolved(t *testing.T) {
 	setEnvFixture(t)
-	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json", langs)
 	require.NoError(t, err)
 
 	sys := cfg.Systems["interpolated"]
@@ -537,7 +540,7 @@ func TestEnvPlaceholdersResolved(t *testing.T) {
 
 func TestEnvPlaceholderNonIdentifierIsLiteral(t *testing.T) {
 	setEnvFixture(t)
-	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json", langs)
 	require.NoError(t, err)
 	// ${env:not an identifier} does not match the grammar, so it stays as typed.
 	assert.Equal(t, "literal ${env:not an identifier} stays", cfg.Systems["interpolated"].ConnectionName)
@@ -545,7 +548,7 @@ func TestEnvPlaceholderNonIdentifierIsLiteral(t *testing.T) {
 
 func TestEnvPlaceholdersLeaveOtherSystemsUntouched(t *testing.T) {
 	setEnvFixture(t)
-	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	cfg, err := sapmcpconfig.Load("testdata/env_placeholders.json", langs)
 	require.NoError(t, err)
 
 	plain := cfg.Systems["plain"]
@@ -556,9 +559,9 @@ func TestEnvPlaceholdersLeaveOtherSystemsUntouched(t *testing.T) {
 
 func TestEnvPlaceholdersYAMLMatchesJSON(t *testing.T) {
 	setEnvFixture(t)
-	jsonCfg, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	jsonCfg, err := sapmcpconfig.Load("testdata/env_placeholders.json", langs)
 	require.NoError(t, err)
-	yamlCfg, err := sapmcpconfig.Load("testdata/env_placeholders.yaml")
+	yamlCfg, err := sapmcpconfig.Load("testdata/env_placeholders.yaml", langs)
 	require.NoError(t, err)
 
 	for name, jsonSys := range jsonCfg.Systems {
@@ -587,7 +590,7 @@ func TestEnvPlaceholderNearMissesKeptVerbatim(t *testing.T) {
 				},
 			})
 			require.NoError(t, err)
-			cfg, err := sapmcpconfig.Parse(data)
+			cfg, err := sapmcpconfig.Parse(data, langs)
 			require.NoError(t, err)
 			assert.Equal(t, literal, cfg.Systems["a"].Password)
 		})
@@ -596,7 +599,7 @@ func TestEnvPlaceholderNearMissesKeptVerbatim(t *testing.T) {
 
 func TestEnvPlaceholderUnsetIsError(t *testing.T) {
 	unsetEnvFixture(t)
-	_, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	_, err := sapmcpconfig.Load("testdata/env_placeholders.json", langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "references ${env:SAP_MCP_TEST_HOSTNAME}, which is not set in the environment")
 }
@@ -604,7 +607,7 @@ func TestEnvPlaceholderUnsetIsError(t *testing.T) {
 func TestEnvPlaceholderUnsetDoesNotBecomeOAuth2(t *testing.T) {
 	// A forgotten export must fail loudly, not silently switch the system to OAuth2.
 	unsetEnvFixture(t)
-	_, err := sapmcpconfig.Load("testdata/env_placeholders.json")
+	_, err := sapmcpconfig.Load("testdata/env_placeholders.json", langs)
 	require.Error(t, err)
 	msg := err.Error()
 	assert.Contains(t, msg, "user references ${env:SAP_MCP_TEST_USER}")
@@ -617,7 +620,7 @@ func TestEnvPlaceholderUnsetCollectedWithOtherErrors(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_PW", "")
 	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_PW"))
 	data := `{"default_system":"a","systems":{"a":{"host":"ftp://wrong","client":"100","user":"u","password":"${env:SAP_MCP_TEST_PW}"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	msg := err.Error()
 	assert.Contains(t, msg, "password references ${env:SAP_MCP_TEST_PW}, which is not set")
@@ -629,7 +632,7 @@ func TestEnvSubstitutionIsSinglePass(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_SECRET", "the-real-secret")
 	t.Setenv("SAP_MCP_TEST_INDIRECT", "${env:SAP_MCP_TEST_SECRET}")
 	data := `{"default_system":"a","systems":{"a":{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_INDIRECT}"}}}`
-	cfg, err := sapmcpconfig.Parse([]byte(data))
+	cfg, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.NoError(t, err)
 	assert.Equal(t, "${env:SAP_MCP_TEST_SECRET}", cfg.Systems["a"].Password)
 }
@@ -638,13 +641,76 @@ func TestEnvPlaceholderInDefaultSystem(t *testing.T) {
 	t.Setenv("SAP_MCP_TEST_DEFAULT", "")
 	require.NoError(t, os.Unsetenv("SAP_MCP_TEST_DEFAULT"))
 	data := `{"default_system":"${env:SAP_MCP_TEST_DEFAULT}","systems":{"a":{"host":"https://h","client":"100","user":"u","password":"p"}}}`
-	_, err := sapmcpconfig.Parse([]byte(data))
+	_, err := sapmcpconfig.Parse([]byte(data), langs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "default_system references ${env:SAP_MCP_TEST_DEFAULT}")
 }
 
 func TestLoadDefaultFileNotFound(t *testing.T) {
 	t.Setenv("SAP_CONFIG_FILE", "/nonexistent/path/systems.json")
-	_, err := sapmcpconfig.LoadDefault()
+	_, err := sapmcpconfig.LoadDefault(langs)
 	require.Error(t, err)
+}
+
+const oneSystem = `{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p"%s}}}`
+
+func TestCustomSupportedLanguagesAccepted(t *testing.T) {
+	data := fmt.Sprintf(oneSystem, `,"language":"it"`)
+	cfg, err := sapmcpconfig.Parse([]byte(data), []string{"IT"})
+	require.NoError(t, err)
+	assert.Equal(t, "IT", cfg.Systems["a"].Language)
+}
+
+func TestSupportedLanguagesNormalizedAndSorted(t *testing.T) {
+	data := fmt.Sprintf(oneSystem, `,"language":"IT"`)
+	_, err := sapmcpconfig.Parse([]byte(data), []string{"en", "DE", "en"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `language must be one of "DE", "EN", got "IT"`)
+}
+
+func TestOmittedLanguageMustBeSupported(t *testing.T) {
+	data := fmt.Sprintf(oneSystem, "")
+	_, err := sapmcpconfig.Parse([]byte(data), []string{"DE"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `language must be one of "DE", got "EN"`)
+}
+
+func TestEmptySupportedLanguagesRejected(t *testing.T) {
+	t.Setenv("SAP_CONFIG_FILE", "nonexistent.json")
+	calls := map[string]func(l []string) error{
+		"Parse":     func(l []string) error { _, err := sapmcpconfig.Parse([]byte("{}"), l); return err },
+		"ParseYAML": func(l []string) error { _, err := sapmcpconfig.ParseYAML([]byte("{}"), l); return err },
+		"Load":      func(l []string) error { _, err := sapmcpconfig.Load("nonexistent.json", l); return err },
+		"LoadDefault": func(l []string) error {
+			_, err := sapmcpconfig.LoadDefault(l)
+			return err
+		},
+	}
+	for name, call := range calls {
+		for label, l := range map[string][]string{"nil": nil, "empty": {}} {
+			t.Run(name+"/"+label, func(t *testing.T) {
+				err := call(l)
+				require.Error(t, err)
+				assert.EqualError(t, err, "supported languages must not be empty")
+			})
+		}
+	}
+}
+
+func TestEmptyStringInSupportedLanguagesRejected(t *testing.T) {
+	_, err := sapmcpconfig.Parse([]byte("{}"), []string{"DE", ""})
+	require.Error(t, err)
+	assert.EqualError(t, err, "supported languages must not contain an empty string")
+}
+
+func TestValidateRequiresAndChecksLanguages(t *testing.T) {
+	cfg := &sapmcpconfig.Config{
+		DefaultSystem: "a",
+		Systems:       map[string]sapmcpconfig.SAPSystem{"a": {Host: "https://h", User: "u", Password: "p"}},
+	}
+	assert.EqualError(t, cfg.Validate(nil), "supported languages must not be empty")
+	err := cfg.Validate([]string{"DE"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `language must be one of "DE", got "EN"`)
+	assert.NoError(t, cfg.Validate(langs))
 }

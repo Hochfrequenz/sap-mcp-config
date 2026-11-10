@@ -4,20 +4,29 @@
 // Use [Load] or [LoadDefault] to read a configuration file (JSON or YAML).
 // Use [Parse] to parse JSON bytes directly, or [ParseYAML] for YAML.
 // All functions validate the configuration before returning it.
+//
+// Every entry point requires the list of languages the calling MCP server
+// supports. A system's language must be one of them (case-insensitive); an
+// omitted language defaults to "EN" and is then checked like any other value.
 package sapmcpconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
+
+// defaultLanguage is applied to a system whose language is omitted or empty.
+const defaultLanguage = "EN"
 
 // DefaultConfigPath is the fallback location when SAP_CONFIG_FILE is not set.
 const DefaultConfigPath = "~/.config/sap-mcp/systems.json"
@@ -232,81 +241,139 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[1:])
 }
 
+// normalizeSupportedLanguages uppercases, deduplicates and sorts the languages
+// a caller supports. It rejects an empty list and empty entries, which are
+// programming errors rather than configuration problems.
+func normalizeSupportedLanguages(langs []string) ([]string, error) {
+	if len(langs) == 0 {
+		return nil, errors.New("supported languages must not be empty")
+	}
+	out := make([]string, 0, len(langs))
+	for _, l := range langs {
+		if l == "" {
+			return nil, errors.New("supported languages must not contain an empty string")
+		}
+		out = append(out, strings.ToUpper(l))
+	}
+	sort.Strings(out)
+	return slices.Compact(out), nil
+}
+
+// quoteLanguages renders a normalized language list for error messages.
+func quoteLanguages(langs []string) string {
+	quoted := make([]string, len(langs))
+	for i, l := range langs {
+		quoted[i] = fmt.Sprintf("%q", l)
+	}
+	return strings.Join(quoted, ", ")
+}
+
 // Load reads a Config from a JSON or YAML file and validates it.
 // The format is detected by file extension: .yaml/.yml for YAML, everything
 // else (including .json) for JSON.
 // The path may start with ~ which is expanded to the user's home directory.
-func Load(path string) (*Config, error) {
+// supportedLanguages lists the languages the calling server supports; it must
+// not be empty (see [Parse]).
+func Load(path string, supportedLanguages []string) (*Config, error) {
+	langs, err := normalizeSupportedLanguages(supportedLanguages)
+	if err != nil {
+		return nil, err
+	}
 	expanded := expandHome(path)
 	data, err := os.ReadFile(expanded)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file %q: %w", path, err)
 	}
 	if yamlExtensions[strings.ToLower(filepath.Ext(expanded))] {
-		return ParseYAML(data)
+		return ParseYAML(data, langs)
 	}
-	return Parse(data)
+	return Parse(data, langs)
 }
 
 // LoadDefault loads the configuration from the path specified in the
 // SAP_CONFIG_FILE environment variable, falling back to [DefaultConfigPath].
 // It loads .env files from the current directory before reading the
-// environment variable.
-func LoadDefault() (*Config, error) {
+// environment variable. See [Load] for supportedLanguages.
+func LoadDefault(supportedLanguages []string) (*Config, error) {
+	langs, err := normalizeSupportedLanguages(supportedLanguages)
+	if err != nil {
+		return nil, err
+	}
 	_ = godotenv.Load() // best-effort; missing .env is fine
 	path := os.Getenv("SAP_CONFIG_FILE")
 	if path == "" {
 		path = DefaultConfigPath
 	}
-	return Load(path)
+	return Load(path, langs)
 }
 
 // ParseYAML unmarshals YAML bytes into a Config and validates it.
 // ${env:VAR} placeholders are resolved from the environment first.
-func ParseYAML(data []byte) (*Config, error) {
+// See [Parse] for supportedLanguages.
+func ParseYAML(data []byte, supportedLanguages []string) (*Config, error) {
+	langs, err := normalizeSupportedLanguages(supportedLanguages)
+	if err != nil {
+		return nil, err
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config (expected YAML): %w", err)
 	}
-	return normalizeAndValidate(&cfg)
+	return normalizeAndValidate(&cfg, langs)
 }
 
 // Parse unmarshals JSON bytes into a Config and validates it.
 // ${env:VAR} placeholders are resolved from the environment first.
-func Parse(data []byte) (*Config, error) {
+//
+// supportedLanguages lists the languages the calling server supports. Entries
+// are uppercased, deduplicated and sorted. Every system's language must be one
+// of them (case-insensitive); an omitted language counts as "EN". An empty
+// list, or one containing an empty string, is an error.
+func Parse(data []byte, supportedLanguages []string) (*Config, error) {
+	langs, err := normalizeSupportedLanguages(supportedLanguages)
+	if err != nil {
+		return nil, err
+	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config (expected JSON): %w", err)
 	}
-	return normalizeAndValidate(&cfg)
+	return normalizeAndValidate(&cfg, langs)
 }
 
 // normalizeAndValidate interpolates, validates and normalizes a parsed Config.
-func normalizeAndValidate(cfg *Config) (*Config, error) {
+// langs must already be normalized.
+func normalizeAndValidate(cfg *Config, langs []string) (*Config, error) {
 	report := interpolateSystems(cfg)
-	if err := cfg.validate(report); err != nil {
+	if err := cfg.validate(report, langs); err != nil {
 		return nil, err
 	}
 	for name, sys := range cfg.Systems {
 		sys.Language = strings.ToUpper(sys.Language)
 		if sys.Language == "" {
-			sys.Language = "EN"
+			sys.Language = defaultLanguage
 		}
 		cfg.Systems[name] = sys
 	}
 	return cfg, nil
 }
 
-// Validate checks that the Config is well-formed.
+// Validate checks that the Config is well-formed, including that every
+// system's language (empty meaning "EN") is one of supportedLanguages.
 // It collects all errors so users can fix everything in one pass.
-func (c *Config) Validate() error {
-	return c.validate(placeholderReport{})
+func (c *Config) Validate(supportedLanguages []string) error {
+	langs, err := normalizeSupportedLanguages(supportedLanguages)
+	if err != nil {
+		return err
+	}
+	return c.validate(placeholderReport{}, langs)
 }
 
 // validate checks the Config, taking into account which fields could not be
 // resolved from the environment. A zero report means no interpolation happened,
-// which is what [Config.Validate] passes for a hand-built Config.
-func (c *Config) validate(report placeholderReport) error {
+// which is what [Config.Validate] passes for a hand-built Config. langs must
+// already be normalized.
+func (c *Config) validate(report placeholderReport, langs []string) error {
 	// Placeholder problems are reported alongside everything else so the user
 	// still fixes the whole file in one pass.
 	errs := append([]string(nil), report.messages...)
@@ -343,13 +410,16 @@ func (c *Config) validate(report placeholderReport) error {
 			(sys.User == "") != (sys.Password == "") {
 			errs = append(errs, fmt.Sprintf("system %q: must have both user and password, or neither (for OAuth2)", name))
 		}
-		if !report.unusable(name, "language") && sys.Language != "" {
+		if !report.unusable(name, "language") {
 			// Report the normalized value, matching Python, whose BeforeValidator has
 			// already uppercased the field by the time it reaches validation.
 			lang := strings.ToUpper(sys.Language)
-			if lang != "DE" && lang != "EN" {
-				errs = append(errs, fmt.Sprintf("system %q: language must be \"DE\" or \"EN\", got %s",
-					name, report.describe(name, "language", lang)))
+			if lang == "" {
+				lang = defaultLanguage
+			}
+			if !slices.Contains(langs, lang) {
+				errs = append(errs, fmt.Sprintf("system %q: language must be one of %s, got %s",
+					name, quoteLanguages(langs), report.describe(name, "language", lang)))
 			}
 		}
 	}
