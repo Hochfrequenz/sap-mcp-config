@@ -205,7 +205,7 @@ The important half of this table is the bottom: text that *looks* like a placeho
 - **A variable that is set but empty is also an error.** `SAP_PASSWORD=` is the shape an unpopulated CI secret takes, and accepting it would strip the credential just as silently.
 - Substitution runs **once**. A value pulled from the environment is not scanned again, so a secret that happens to contain `${env:...}` is kept as literal text rather than triggering a further lookup - and it does not matter whether that inner name refers to a real variable.
 - Placeholders are resolved in the fields listed above, in JSON and YAML alike. They are **not** resolved in `tls_skip_verify` (which is a boolean, not a string) nor in the system *names* themselves.
-- `${env:VAR}` is resolved in `.env`-provided variables too, when you load via `load_default()` / `LoadDefault()`.
+- `${env:VAR}` is resolved in `.env`-provided variables too, when you load via `load_default` / `LoadDefault`.
 
 A missing variable is reported like any other error:
 
@@ -476,5 +476,6 @@ v2 makes the supported languages an explicit argument instead of the hardcoded `
 
 - Go: `go get github.com/Hochfrequenz/sap-mcp-config/v2@v2.0.0` and change the import path to `github.com/Hochfrequenz/sap-mcp-config/v2`.
 - Add the new argument to every call. Pass `["DE", "EN"]` (Go: `[]string{"DE", "EN"}`) to keep the v1 behaviour.
-- Go: `Validate()` becomes `Validate(supportedLanguages)`.
+- Go: `Validate()` becomes `Validate(supportedLanguages)`, and it now also checks the `EN` default of a system without `language`.
+- Python: a bad `supported_languages` argument raises `TypeError` (a bare string or non-string entries) or `ValueError` (empty, or containing an empty string) before the file is read.
 - The error message changed from `language must be "DE" or "EN"` to `language must be one of "DE", "EN"`.
