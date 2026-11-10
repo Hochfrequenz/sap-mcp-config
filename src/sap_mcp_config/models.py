@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from collections.abc import Collection
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -15,19 +16,24 @@ from pydantic_core import InitErrorDetails, PydanticCustomError
 DEFAULT_CONFIG_PATH = "~/.config/sap-mcp/systems.json"
 
 
+#: Language applied to a system whose language is omitted or empty.
+_DEFAULT_LANGUAGE = "EN"
+
+
 def _normalize_language(value: object) -> object:
     """Uppercase a language and treat an empty one as the default."""
     if isinstance(value, str):
-        return value.upper() or "EN"
+        return value.upper() or _DEFAULT_LANGUAGE
     return value
 
 
 #: Language field type that normalizes to uppercase before validation.
 #:
-#: The allowed values are checked in :meth:`Config._validate` rather than by a
-#: ``Literal``: a field-level failure aborts validation before the model
-#: validator runs, which would drop every other collected error and disagree
-#: with Go, where an invalid language is just one more entry in the list.
+#: The allowed values are the caller's supported languages. They are checked in
+#: :meth:`Config._validate` rather than by a ``Literal``: a field-level failure
+#: aborts validation before the model validator runs, which would drop every
+#: other collected error and disagree with Go, where an invalid language is
+#: just one more entry in the list.
 Language = Annotated[str, BeforeValidator(_normalize_language)]
 
 #: Matches an ``${env:VAR}`` placeholder.  ``VAR`` must be a plain identifier,
@@ -47,6 +53,30 @@ _INTERPOLATED_FIELDS = ("connection_name", "host", "client", "user", "password",
 
 #: Key under which the :class:`_PlaceholderReport` is passed to the validator.
 _REPORT_CONTEXT_KEY = "sap_mcp_config.placeholder_report"
+
+#: Validation-context key under which the normalized supported languages travel.
+#: Without it (direct ``Config(...)`` construction) the membership check is
+#: skipped; the other language normalization and checks still run.
+_LANGUAGES_CONTEXT_KEY = "sap_mcp_config.supported_languages"
+
+
+def _normalize_supported_languages(languages: Collection[str]) -> tuple[str, ...]:
+    """Uppercase, deduplicate and sort the languages a caller supports.
+
+    Raises ``TypeError`` for a bare string or non-string entries and
+    ``ValueError`` for an empty collection or an empty entry. These are
+    programming errors, deliberately not ``pydantic.ValidationError``.
+    """
+    if isinstance(languages, str):
+        raise TypeError("supported languages must be a collection of strings, not a single string")
+    entries = list(languages)
+    if not all(isinstance(entry, str) for entry in entries):
+        raise TypeError("supported languages must be strings")
+    if not entries:
+        raise ValueError("supported languages must not be empty")
+    if "" in entries:
+        raise ValueError("supported languages must not contain an empty string")
+    return tuple(sorted({entry.upper() for entry in entries}))
 
 
 def _quote(value: str) -> str:
@@ -244,7 +274,7 @@ class SAPSystem(BaseModel):
     client: Annotated[str, BeforeValidator(lambda v: str(v) if isinstance(v, (int, float)) else v)] = ""
     user: str = ""
     password: SecretStr = SecretStr("")
-    language: Language = "EN"
+    language: Language = _DEFAULT_LANGUAGE
     tls_skip_verify: bool = False
     oauth2_client_id: str = ""
 
@@ -278,7 +308,10 @@ class Config(BaseModel):
         """Collect **all** validation errors so users can fix everything in one pass."""
         context = info.context if isinstance(info.context, dict) else {}
         # A directly constructed Config carries no report, which simply means no
-        # interpolation happened — the same as Go's exported Validate.
+        # interpolation happened. It carries no supported languages either, so the
+        # membership check is skipped (Go's exported Validate takes them as an
+        # argument instead).
+        allowed: tuple[str, ...] | None = context.get(_LANGUAGES_CONTEXT_KEY)
         report = context.get(_REPORT_CONTEXT_KEY) or _PlaceholderReport()
         # Placeholder problems are reported alongside everything else so the user
         # still fixes the whole file in one pass.
@@ -313,9 +346,10 @@ class Config(BaseModel):
                 pwd == ""
             ):
                 errs.append(f"system {_quote(name)}: must have both user and password, or neither (for OAuth2)")
-            if not report.unusable(name, "language") and sys.language not in ("DE", "EN"):
+            if allowed is not None and not report.unusable(name, "language") and sys.language not in allowed:
                 described = report.describe(name, "language", sys.language)
-                errs.append(f'system {_quote(name)}: language must be "DE" or "EN", got {described}')
+                listed = ", ".join(_quote(lang) for lang in allowed)
+                errs.append(f"system {_quote(name)}: language must be one of {listed}, got {described}")
         if errs:
             raise ValueError("invalid configuration:\n  - " + "\n  - ".join(errs))
         return self
@@ -345,36 +379,43 @@ class Config(BaseModel):
             raise _scrub_input(exc) from None
 
 
-def parse(data: str | bytes) -> Config:
+def parse(data: str | bytes, *, supported_languages: Collection[str]) -> Config:
     """Parse a JSON string or bytes into a validated Config.
 
     Raises ``pydantic.ValidationError`` with human-readable messages
     if the configuration is invalid.
+
+    *supported_languages* lists the languages the calling server supports
+    (case-insensitive, deduplicated). Every system's language must be one of
+    them; an omitted language counts as ``EN``. An empty collection or an empty
+    entry raises ``ValueError``, a bare string or non-string entry ``TypeError``.
     """
+    allowed = _normalize_supported_languages(supported_languages)
     raw = json.loads(data)
     if not isinstance(raw, dict):
         raise ValueError("expected a JSON object at the top level")
     report = _interpolate(raw)
-    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
+    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report, _LANGUAGES_CONTEXT_KEY: allowed})
 
 
-def parse_yaml(data: str | bytes) -> Config:
+def parse_yaml(data: str | bytes, *, supported_languages: Collection[str]) -> Config:
     """Parse a YAML string or bytes into a validated Config.
 
     Raises ``pydantic.ValidationError`` with human-readable messages
-    if the configuration is invalid.
+    if the configuration is invalid. See :func:`parse` for *supported_languages*.
     """
+    allowed = _normalize_supported_languages(supported_languages)
     raw = yaml.safe_load(data)
     if not isinstance(raw, dict):
         raise ValueError("expected a YAML mapping at the top level")
     report = _interpolate(raw)
-    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report})
+    return Config.model_validate(raw, context={_REPORT_CONTEXT_KEY: report, _LANGUAGES_CONTEXT_KEY: allowed})
 
 
 _YAML_EXTENSIONS = {".yaml", ".yml"}
 
 
-def load(path: str | Path) -> Config:
+def load(path: str | Path, *, supported_languages: Collection[str]) -> Config:
     """Load a Config from a JSON or YAML file.
 
     The format is detected by file extension: ``.yaml`` / ``.yml`` for YAML,
@@ -382,25 +423,29 @@ def load(path: str | Path) -> Config:
 
     The *path* may start with ``~`` which is expanded to the user's home
     directory.
+
+    See :func:`parse` for *supported_languages*.
     """
+    allowed = _normalize_supported_languages(supported_languages)
     resolved = Path(path).expanduser()
     data = resolved.read_bytes()
     if resolved.suffix.lower() in _YAML_EXTENSIONS:
-        return parse_yaml(data)
-    return parse(data)
+        return parse_yaml(data, supported_languages=allowed)
+    return parse(data, supported_languages=allowed)
 
 
-def load_default() -> Config:
+def load_default(*, supported_languages: Collection[str]) -> Config:
     """Load configuration from ``SAP_CONFIG_FILE`` env var, falling back to
     :data:`DEFAULT_CONFIG_PATH`.
 
     Loads ``.env`` files from the current directory before reading the
-    environment variable.
+    environment variable. See :func:`parse` for *supported_languages*.
     """
+    allowed = _normalize_supported_languages(supported_languages)
     # usecwd=True because a bare load_dotenv() searches upwards from *this*
     # module's directory, i.e. inside site-packages for an installed package.
     # Go's godotenv.Load() reads ./.env, so without this the two disagree about
     # which .env exists whenever the entry-point script lives elsewhere.
     load_dotenv(find_dotenv(usecwd=True))  # best-effort; missing .env is fine
     path = os.environ.get("SAP_CONFIG_FILE", DEFAULT_CONFIG_PATH)
-    return load(path)
+    return load(path, supported_languages=allowed)

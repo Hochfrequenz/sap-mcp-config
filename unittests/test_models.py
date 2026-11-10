@@ -1,6 +1,7 @@
 """Tests for sap_mcp_config — must stay consistent with config_test.go."""
 
 import json
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,9 @@ TESTDATA_YAML = Path(__file__).resolve().parent.parent / "testdata" / "systems.y
 TESTDATA_SPECIAL = Path(__file__).resolve().parent.parent / "testdata" / "special_characters.json"
 TESTDATA_ENV = Path(__file__).resolve().parent.parent / "testdata" / "env_placeholders.json"
 TESTDATA_ENV_YAML = Path(__file__).resolve().parent.parent / "testdata" / "env_placeholders.yaml"
+
+#: Supported-language set used by most tests.
+LANGS = ("DE", "EN")
 
 #: Environment for testdata/env_placeholders.* — kept identical in config_test.go.
 ENV_FIXTURE_VARS = {
@@ -35,7 +39,7 @@ class TestLoadTestFixture:
     """Parse the shared testdata/systems.json — same assertions as the Go tests."""
 
     def test_load_fixture(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
 
         assert cfg.default_system == "dev"
         assert len(cfg.systems) == 3
@@ -73,7 +77,7 @@ class TestLoadTestFixture:
 
 class TestGetDefault:
     def test_get_default(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         default = cfg.get_default()
         assert default.host == "https://dev-sap.example.com:44300"
 
@@ -83,7 +87,7 @@ class TestLanguageDefaultsToEN:
         data = (
             '{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}'
         )
-        cfg = parse(data)
+        cfg = parse(data, supported_languages=LANGS)
         assert cfg.systems["s"].language == "EN"
 
 
@@ -93,7 +97,7 @@ class TestLanguageCaseInsensitive:
             '{"default_system":"s","systems":{"s":'
             '{"host":"https://x:443","client":"100","user":"u","password":"p","language":"de"}}}'
         )
-        cfg = parse(data)
+        cfg = parse(data, supported_languages=LANGS)
         assert cfg.systems["s"].language == "DE"
 
 
@@ -101,7 +105,7 @@ class TestSpecialCharacterPasswords:
     """Passwords with quotes, backslashes, unicode — same assertions as Go tests."""
 
     def test_special_characters(self) -> None:
-        cfg = load(TESTDATA_SPECIAL)
+        cfg = load(TESTDATA_SPECIAL, supported_languages=LANGS)
         assert len(cfg.systems) == 3
 
         tricky = cfg.systems["tricky"]
@@ -120,54 +124,66 @@ class TestPasswordMasking:
     """Passwords must never leak through str/repr."""
 
     def test_password_masked_in_str(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         text = str(cfg.systems["dev"])
         assert "dev_secret" not in text
         assert "**" in text  # SecretStr shows '**********'
 
     def test_password_masked_in_repr(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         text = repr(cfg.systems["dev"])
         assert "dev_secret" not in text
 
     def test_password_accessible_via_get_secret_value(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         assert cfg.systems["dev"].password.get_secret_value() == "dev_secret"
 
 
 class TestParseValidation:
     def test_no_systems(self) -> None:
         with pytest.raises(ValidationError, match="no systems defined"):
-            parse('{"default_system":"x","systems":{}}')
+            parse('{"default_system":"x","systems":{}}', supported_languages=LANGS)
 
     def test_default_not_found(self) -> None:
         with pytest.raises(ValidationError, match='default_system "missing" not found'):
-            parse('{"default_system":"missing","systems":{"a":{"host":"https://h","user":"u","password":"p"}}}')
+            parse(
+                '{"default_system":"missing","systems":{"a":{"host":"https://h","user":"u","password":"p"}}}',
+                supported_languages=LANGS,
+            )
 
     def test_missing_host(self) -> None:
         with pytest.raises(ValidationError, match="host"):
-            parse('{"default_system":"a","systems":{"a":{"user":"u","password":"p"}}}')
+            parse('{"default_system":"a","systems":{"a":{"user":"u","password":"p"}}}', supported_languages=LANGS)
 
     def test_invalid_host_scheme(self) -> None:
         with pytest.raises(ValidationError, match="host must start with http"):
-            parse('{"default_system":"a","systems":{"a":{"host":"ftp://h","client":"100","user":"u","password":"p"}}}')
+            parse(
+                '{"default_system":"a","systems":{"a":{"host":"ftp://h","client":"100","user":"u","password":"p"}}}',
+                supported_languages=LANGS,
+            )
 
     def test_invalid_client(self) -> None:
         with pytest.raises(ValidationError, match="client must be a 3-digit string"):
-            parse('{"default_system":"a","systems":{"a":{"host":"https://h","client":"1","user":"u","password":"p"}}}')
+            parse(
+                '{"default_system":"a","systems":{"a":{"host":"https://h","client":"1","user":"u","password":"p"}}}',
+                supported_languages=LANGS,
+            )
 
     def test_user_without_password(self) -> None:
         with pytest.raises(ValidationError, match="must have both user and password"):
-            parse('{"default_system":"a","systems":{"a":{"host":"https://h","user":"u"}}}')
+            parse('{"default_system":"a","systems":{"a":{"host":"https://h","user":"u"}}}', supported_languages=LANGS)
 
     def test_password_without_user(self) -> None:
         with pytest.raises(ValidationError, match="must have both user and password"):
-            parse('{"default_system":"a","systems":{"a":{"host":"https://h","password":"p"}}}')
+            parse(
+                '{"default_system":"a","systems":{"a":{"host":"https://h","password":"p"}}}', supported_languages=LANGS
+            )
 
     def test_invalid_language(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match='language must be one of "DE", "EN"'):
             parse(
-                '{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"FR"}}}'
+                '{"default_system":"a","systems":{"a":{"host":"https://h","user":"u","password":"p","language":"FR"}}}',
+                supported_languages=LANGS,
             )
 
 
@@ -183,26 +199,29 @@ class TestStandaloneSAPSystem:
     def test_unknown_language_deferred_to_config(self) -> None:
         """Validating here would abort Config's model validator and hide every other error."""
         assert SAPSystem(host="https://x", language="fr").language == "FR"
-        with pytest.raises(ValidationError, match='language must be "DE" or "EN"'):
-            parse('{"default_system":"a","systems":{"a":{"host":"https://h","language":"fr"}}}')
+        with pytest.raises(ValidationError, match='language must be one of "DE", "EN"'):
+            parse(
+                '{"default_system":"a","systems":{"a":{"host":"https://h","language":"fr"}}}', supported_languages=LANGS
+            )
 
     def test_config_collects_language_with_other_errors(self) -> None:
         """The reason the check lives on Config: one bad language must not hide the rest."""
         with pytest.raises(ValidationError) as exc_info:
-            Config.model_validate(
-                {"default_system": "x", "systems": {"x": {"host": "bad", "client": "1", "language": "fr"}}}
+            parse(
+                '{"default_system":"x","systems":{"x":{"host":"bad","client":"1","language":"fr"}}}',
+                supported_languages=LANGS,
             )
         message = exc_info.value.errors()[0]["msg"]
         assert "host must start with http" in message
         assert "client must be a 3-digit string" in message
-        assert 'language must be "DE" or "EN"' in message
+        assert 'language must be one of "DE", "EN", got "FR"' in message
 
 
 class TestLoadYAMLFixture:
     """Parse the shared testdata/systems.yaml — same assertions as JSON tests."""
 
     def test_load_yaml_fixture(self) -> None:
-        cfg = load(TESTDATA_YAML)
+        cfg = load(TESTDATA_YAML, supported_languages=LANGS)
 
         assert cfg.default_system == "dev"
         assert len(cfg.systems) == 3
@@ -224,8 +243,8 @@ class TestLoadYAMLFixture:
 
 class TestYAMLMatchesJSON:
     def test_yaml_and_json_produce_same_config(self) -> None:
-        json_cfg = load(TESTDATA)
-        yaml_cfg = load(TESTDATA_YAML)
+        json_cfg = load(TESTDATA, supported_languages=LANGS)
+        yaml_cfg = load(TESTDATA_YAML, supported_languages=LANGS)
 
         assert json_cfg.default_system == yaml_cfg.default_system
         assert len(json_cfg.systems) == len(yaml_cfg.systems)
@@ -247,13 +266,13 @@ class TestParseYAML:
             "default_system: s\nsystems:\n  s:\n"
             "    host: 'https://x:443'\n    client: '100'\n    user: u\n    password: p\n"
         )
-        cfg = parse_yaml(data)
+        cfg = parse_yaml(data, supported_languages=LANGS)
         assert len(cfg.systems) == 1
         assert cfg.systems["s"].language == "EN"  # default applied
 
     def test_parse_yaml_invalid(self) -> None:
         with pytest.raises(ValueError, match="expected a YAML mapping"):
-            parse_yaml("just a string")
+            parse_yaml("just a string", supported_languages=LANGS)
 
 
 class TestYAMLUnquotedClient:
@@ -264,7 +283,7 @@ class TestYAMLUnquotedClient:
             "default_system: s\nsystems:\n  s:\n"
             "    host: 'https://x:443'\n    client: 100\n    user: u\n    password: p\n"
         )
-        cfg = parse_yaml(data)
+        cfg = parse_yaml(data, supported_languages=LANGS)
         assert cfg.systems["s"].client == "100"
         assert isinstance(cfg.systems["s"].client, str)
 
@@ -274,7 +293,7 @@ class TestYAMLSpecialCharacters:
 
     def test_special_characters_yaml(self) -> None:
         testdata_special_yaml = Path(__file__).resolve().parent.parent / "testdata" / "special_characters.yaml"
-        cfg = load(testdata_special_yaml)
+        cfg = load(testdata_special_yaml, supported_languages=LANGS)
         assert cfg.systems["tricky"].password.get_secret_value() == "p@ss:word#with!special&chars"
         assert cfg.systems["backslash"].user == "DOMAIN\\USER"
         assert cfg.systems["backslash"].password.get_secret_value() == "pass\\word\\with\\backslashes"
@@ -285,18 +304,18 @@ class TestLoadYMLExtension:
         src = TESTDATA_YAML.read_bytes()
         yml_file = tmp_path / "config.yml"
         yml_file.write_bytes(src)
-        cfg = load(yml_file)
+        cfg = load(yml_file, supported_languages=LANGS)
         assert cfg.default_system == "dev"
 
 
 class TestFrozenModels:
     def test_config_is_immutable(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         with pytest.raises(ValidationError):
             cfg.default_system = "other"  # type: ignore[misc]
 
     def test_system_is_immutable(self) -> None:
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         with pytest.raises(ValidationError):
             cfg.systems["dev"].user = "hacked"  # type: ignore[misc]
 
@@ -306,20 +325,20 @@ class TestParseMinimal:
         data = (
             '{"default_system":"s","systems":{"s":{"host":"https://x:443","client":"100","user":"u","password":"p"}}}'
         )
-        cfg = parse(data)
+        cfg = parse(data, supported_languages=LANGS)
         assert len(cfg.systems) == 1
 
 
 class TestLoadFileNotFound:
     def test_file_not_found(self) -> None:
         with pytest.raises(FileNotFoundError):
-            load("nonexistent.json")
+            load("nonexistent.json", supported_languages=LANGS)
 
 
 class TestLoadDefault:
     def test_load_default_uses_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SAP_CONFIG_FILE", str(TESTDATA))
-        cfg = load_default()
+        cfg = load_default(supported_languages=LANGS)
         assert cfg.default_system == "dev"
 
 
@@ -330,7 +349,7 @@ class TestReadmeExample:
         """The README claims that multiple problems are reported in a single error."""
         bad_config = '{"default_system":"missing","systems":{"dev":{"host":"ftp://wrong","client":"1","user":"u"}}}'
         with pytest.raises(ValidationError) as exc_info:
-            parse(bad_config)
+            parse(bad_config, supported_languages=LANGS)
         msg = str(exc_info.value)
         assert "host must start with http" in msg
         assert "client must be a 3-digit string" in msg
@@ -340,7 +359,7 @@ class TestReadmeExample:
         """The README shows catching FileNotFoundError from load_default."""
         monkeypatch.setenv("SAP_CONFIG_FILE", "/nonexistent/path/systems.json")
         with pytest.raises(FileNotFoundError):
-            load_default()
+            load_default(supported_languages=LANGS)
 
 
 class TestEnvPlaceholders:
@@ -348,7 +367,7 @@ class TestEnvPlaceholders:
 
     @pytest.mark.usefixtures("env_fixture")
     def test_placeholders_resolved_from_env(self) -> None:
-        cfg = load(TESTDATA_ENV)
+        cfg = load(TESTDATA_ENV, supported_languages=LANGS)
         system = cfg.systems["interpolated"]
 
         # A placeholder may be the whole value...
@@ -362,12 +381,12 @@ class TestEnvPlaceholders:
     @pytest.mark.usefixtures("env_fixture")
     def test_non_identifier_is_left_literal(self) -> None:
         """``${env:not an identifier}`` does not match the grammar, so it stays as typed."""
-        cfg = load(TESTDATA_ENV)
+        cfg = load(TESTDATA_ENV, supported_languages=LANGS)
         assert cfg.systems["interpolated"].connection_name == "literal ${env:not an identifier} stays"
 
     @pytest.mark.usefixtures("env_fixture")
     def test_systems_without_placeholders_are_untouched(self) -> None:
-        cfg = load(TESTDATA_ENV)
+        cfg = load(TESTDATA_ENV, supported_languages=LANGS)
         plain = cfg.systems["plain"]
         assert plain.host == "https://plain-sap.example.com:44300"
         assert plain.user == "PLAIN_USER"
@@ -375,8 +394,8 @@ class TestEnvPlaceholders:
 
     @pytest.mark.usefixtures("env_fixture")
     def test_yaml_matches_json(self) -> None:
-        json_cfg = load(TESTDATA_ENV)
-        yaml_cfg = load(TESTDATA_ENV_YAML)
+        json_cfg = load(TESTDATA_ENV, supported_languages=LANGS)
+        yaml_cfg = load(TESTDATA_ENV_YAML, supported_languages=LANGS)
         for name, json_sys in json_cfg.systems.items():
             yaml_sys = yaml_cfg.systems[name]
             assert json_sys.host == yaml_sys.host
@@ -404,21 +423,21 @@ class TestEnvPlaceholders:
                 "systems": {"a": {"host": "https://h", "client": "100", "user": "u", "password": literal}},
             }
         )
-        cfg = parse(data)
+        cfg = parse(data, supported_languages=LANGS)
         assert cfg.systems["a"].password.get_secret_value() == literal
 
     def test_unset_variable_is_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in ENV_FIXTURE_VARS:
             monkeypatch.delenv(key, raising=False)
         with pytest.raises(ValidationError, match=r"references \$\{env:SAP_MCP_TEST_HOSTNAME\}, which is not set"):
-            load(TESTDATA_ENV)
+            load(TESTDATA_ENV, supported_languages=LANGS)
 
     def test_unset_user_and_password_do_not_become_oauth2(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A forgotten export must fail loudly, not silently switch the system to OAuth2."""
         for key in ENV_FIXTURE_VARS:
             monkeypatch.delenv(key, raising=False)
         with pytest.raises(ValidationError) as exc_info:
-            load(TESTDATA_ENV)
+            load(TESTDATA_ENV, supported_languages=LANGS)
         msg = str(exc_info.value)
         assert "user references ${env:SAP_MCP_TEST_USER}" in msg
         assert "password references ${env:SAP_MCP_TEST_PASSWORD}" in msg
@@ -432,7 +451,7 @@ class TestEnvPlaceholders:
             '{"host":"ftp://wrong","client":"100","user":"u","password":"${env:SAP_MCP_TEST_PW}"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         msg = str(exc_info.value)
         assert "password references ${env:SAP_MCP_TEST_PW}, which is not set" in msg
         assert "host must start with http" in msg
@@ -457,7 +476,7 @@ class TestEnvPlaceholders:
             }
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         # Assert on our own message, not str(exc): pydantic separately echoes the
         # validator's raw input, which is a pre-existing leak tracked elsewhere.
         message = exc_info.value.errors()[0]["msg"]
@@ -474,7 +493,7 @@ class TestEnvPlaceholders:
             '"user":"U","password":"${env:SAP_MCP_TEST_PW_LEAK}"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         assert "hunter2-env-secret" not in str(exc_info.value)
         # pydantic echoes the validator's input by default; it must be withheld.
         assert exc_info.value.errors()[0]["input"] is None
@@ -486,7 +505,7 @@ class TestEnvPlaceholders:
             '{"host":"https://x","client":"100","user":"u","password":"p"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert "secret-system-name" not in message
         assert "the value taken from the environment" in message
@@ -499,7 +518,7 @@ class TestEnvPlaceholders:
             '"dev":{"host":"https://x","client":"100","user":"u","password":"p"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert 'system "": host references ${env:SAP_MCP_TEST_EMPTY_NAME}' in message
 
@@ -514,7 +533,7 @@ class TestEnvPlaceholders:
         monkeypatch.delenv("SAP_MCP_TEST_DOTENV_PW", raising=False)
         monkeypatch.setenv("SAP_CONFIG_FILE", str(tmp_path / "systems.json"))
         monkeypatch.chdir(tmp_path)
-        cfg = load_default()
+        cfg = load_default(supported_languages=LANGS)
         assert cfg.systems["a"].password.get_secret_value() == "from-dotenv"
 
     def test_message_quoting_escapes_like_go(self) -> None:
@@ -526,7 +545,7 @@ class TestEnvPlaceholders:
             }
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         # Byte-identical to the Go assertion in TestErrorQuotingEscapesSpecialCharacters.
         assert r'got "ftp://ho\"st\nline"' in exc_info.value.errors()[0]["msg"]
 
@@ -537,7 +556,7 @@ class TestEnvPlaceholders:
             "default_system: a\nsystems:\n  a: &s\n    host: bad\n    client: ${env:SAP_MCP_TEST_ALIAS_PW}\n  b: *s\n"
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse_yaml(data)
+            parse_yaml(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert "hunter2" not in message
         assert message.count("the value taken from the environment") == 2
@@ -545,7 +564,7 @@ class TestEnvPlaceholders:
     def test_lone_surrogate_raises_validation_error(self) -> None:
         """A lone surrogate must not turn into UnicodeEncodeError from deep inside pydantic."""
         with pytest.raises(ValidationError):
-            parse('{"default_system":"x","systems":{"x":{"host":"a\\ud800b"}}}')
+            parse('{"default_system":"x","systems":{"x":{"host":"a\\ud800b"}}}', supported_languages=LANGS)
 
     def test_public_model_validate_also_withholds_input(self) -> None:
         """Config is exported and extensible, so the direct entry point is protected too."""
@@ -562,14 +581,14 @@ class TestEnvPlaceholders:
     def test_scrubbed_error_keeps_its_type(self) -> None:
         """Rebuilding the error must not flatten every type to value_error."""
         with pytest.raises(ValidationError) as exc_info:
-            parse('{"systems":{"x":{"host":"https://h"}}}')
+            parse('{"systems":{"x":{"host":"https://h"}}}', supported_languages=LANGS)
         assert exc_info.value.errors()[0]["type"] == "missing"
 
     def test_literal_values_are_still_echoed(self) -> None:
         """A value written in the file is not a secret we hid from the user — keep echoing it."""
         data = '{"default_system":"a","systems":{"a":{"host":"ftp://written-in-file","user":"u","password":"p"}}}'
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         assert "ftp://written-in-file" in exc_info.value.errors()[0]["msg"]
 
     def test_env_value_containing_placeholder_is_literal(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -580,7 +599,7 @@ class TestEnvPlaceholders:
             '{"default_system":"a","systems":{"a":'
             '{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_SECRET_WITH_PH}"}}}'
         )
-        cfg = parse(data)
+        cfg = parse(data, supported_languages=LANGS)
         assert cfg.systems["a"].password.get_secret_value() == "hunter2${env:SAP_MCP_TEST_NEVER_SET}tail"
 
     def test_empty_variable_is_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -592,7 +611,7 @@ class TestEnvPlaceholders:
             '"user":"${env:SAP_MCP_TEST_EMPTY_USER}","password":"${env:SAP_MCP_TEST_EMPTY_PW}"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert "references ${env:SAP_MCP_TEST_EMPTY_USER}, which is set but empty" in message
         assert "must have both user and password" not in message
@@ -607,7 +626,7 @@ class TestEnvPlaceholders:
             '"language":"${env:SAP_MCP_TEST_LL}"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert "user references ${env:SAP_MCP_TEST_UU}" in message
         assert "password references ${env:SAP_MCP_TEST_PP}" in message
@@ -620,7 +639,7 @@ class TestEnvPlaceholders:
             '{"host":"https://h","client":"${env:SAP_MCP_TEST_CL}","user":"u","password":"p"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert "client references ${env:SAP_MCP_TEST_CL}" in message
         assert "3-digit" not in message
@@ -634,7 +653,7 @@ class TestEnvPlaceholders:
             '"host":"https://h","client":"100","oauth2_client_id":"${env:SAP_MCP_TEST_OA}"}}}'
         )
         with pytest.raises(ValidationError) as exc_info:
-            parse(data)
+            parse(data, supported_languages=LANGS)
         message = exc_info.value.errors()[0]["msg"]
         assert "connection_name references ${env:SAP_MCP_TEST_CN}" in message
         assert "oauth2_client_id references ${env:SAP_MCP_TEST_OA}" in message
@@ -644,14 +663,14 @@ class TestEnvPlaceholders:
         for key in ENV_FIXTURE_VARS:
             monkeypatch.delenv(key, raising=False)
         with pytest.raises(ValidationError, match=r"references \$\{env:SAP_MCP_TEST_HOSTNAME\}, which is not set"):
-            load(TESTDATA_ENV_YAML)
+            load(TESTDATA_ENV_YAML, supported_languages=LANGS)
 
     def test_self_referential_yaml_does_not_recurse(self) -> None:
         """A cyclic anchor must not send interpolation into unbounded recursion."""
         data = (
             "x: &a [*a]\ndefault_system: a\nsystems:\n  a: {host: 'https://h', client: '100', user: u, password: p}\n"
         )
-        cfg = parse_yaml(data)
+        cfg = parse_yaml(data, supported_languages=LANGS)
         assert cfg.systems["a"].host == "https://h"
 
     def test_substitution_is_single_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -662,7 +681,7 @@ class TestEnvPlaceholders:
             '{"default_system":"a","systems":{"a":'
             '{"host":"https://h","client":"100","user":"u","password":"${env:SAP_MCP_TEST_INDIRECT}"}}}'
         )
-        cfg = parse(data)
+        cfg = parse(data, supported_languages=LANGS)
         assert cfg.systems["a"].password.get_secret_value() == "${env:SAP_MCP_TEST_SECRET}"
 
     def test_unresolved_default_system_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -672,11 +691,11 @@ class TestEnvPlaceholders:
             '{"host":"https://h","client":"100","user":"u","password":"p"}}}'
         )
         with pytest.raises(ValidationError, match=r"default_system references \$\{env:SAP_MCP_TEST_DEFAULT\}"):
-            parse(data)
+            parse(data, supported_languages=LANGS)
 
     def test_placeholder_in_config_without_env_support_still_works(self) -> None:
         """Configs with no placeholders behave exactly as before."""
-        cfg = load(TESTDATA)
+        cfg = load(TESTDATA, supported_languages=LANGS)
         assert cfg.systems["dev"].password.get_secret_value() == "dev_secret"
 
 
@@ -704,3 +723,59 @@ class TestExtensibility:
         assert sys.custom_timeout == 60
         assert sys.host == "https://sap:44300"
         assert sys.password.get_secret_value() == "p"
+
+
+_ONE_SYSTEM = '{{"default_system":"a","systems":{{"a":{{"host":"https://h","user":"u","password":"p"{extra}}}}}}}'
+
+
+class TestSupportedLanguages:
+    """The caller decides which languages are acceptable."""
+
+    def test_custom_supported_languages_accepted(self) -> None:
+        cfg = parse(_ONE_SYSTEM.format(extra=',"language":"it"'), supported_languages=["IT"])
+        assert cfg.systems["a"].language == "IT"
+
+    def test_supported_languages_normalized_and_sorted(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            parse(_ONE_SYSTEM.format(extra=',"language":"IT"'), supported_languages=["en", "DE", "en"])
+        assert 'language must be one of "DE", "EN", got "IT"' in str(exc_info.value)
+
+    def test_omitted_language_must_be_supported(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            parse(_ONE_SYSTEM.format(extra=""), supported_languages=["DE"])
+        assert 'language must be one of "DE", got "EN"' in str(exc_info.value)
+
+    def test_empty_supported_languages_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SAP_CONFIG_FILE", "nonexistent.json")
+        calls: dict[str, Callable[[Collection[str]], Config]] = {
+            "parse": lambda langs: parse("{}", supported_languages=langs),
+            "parse_yaml": lambda langs: parse_yaml("{}", supported_languages=langs),
+            "load": lambda langs: load("nonexistent.json", supported_languages=langs),
+            "load_default": lambda langs: load_default(supported_languages=langs),
+        }
+        empties: list[Collection[str]] = [[], ()]
+        for name, call in calls.items():
+            for langs in empties:
+                with pytest.raises(ValueError, match=r"^supported languages must not be empty$") as exc_info:
+                    call(langs)
+                assert not isinstance(exc_info.value, ValidationError), name
+
+    def test_empty_string_in_supported_languages_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"^supported languages must not contain an empty string$"):
+            parse("{}", supported_languages=["DE", ""])
+
+    def test_bare_string_rejected(self) -> None:
+        with pytest.raises(TypeError, match="not a single string"):
+            parse("{}", supported_languages="EN")
+
+    def test_non_string_entry_rejected(self) -> None:
+        with pytest.raises(TypeError, match="must be strings"):
+            parse("{}", supported_languages=[1])  # type: ignore[list-item]
+
+    def test_direct_construction_skips_membership_check(self) -> None:
+        cfg = Config(default_system="a", systems={"a": SAPSystem(host="https://h", language="it")})
+        assert cfg.systems["a"].language == "IT"
+
+    def test_model_validate_without_context_skips_membership_check(self) -> None:
+        cfg = Config.model_validate({"default_system": "a", "systems": {"a": {"host": "https://h", "language": "it"}}})
+        assert cfg.systems["a"].language == "IT"

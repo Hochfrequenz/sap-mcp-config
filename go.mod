@@ -1,4 +1,4 @@
-module github.com/Hochfrequenz/sap-mcp-config
+module github.com/Hochfrequenz/sap-mcp-config/v2
 
 go 1.25
 
